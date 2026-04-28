@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="820" viewBox="0 0 1600 820" role="img" aria-labelledby="title desc">
+  <title id="title">Bitaxe Agent dashboard preview</title>
+  <desc id="desc">Sanitized preview of the Bitaxe Agent dashboard with private miner details replaced by generic values.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071513"/>
+      <stop offset="0.46" stop-color="#0d161d"/>
+      <stop offset="1" stop-color="#0b1117"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#142129"/>
+      <stop offset="1" stop-color="#111920"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#b9ff54"/>
+      <stop offset="1" stop-color="#ffd15a"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="0.34"/>
+    </filter>
+    <style>
+      .bg { fill: url(#bg); }
+      .rail { fill: #061014; }
+      .panel { fill: url(#panel); stroke: #0b6d5d; stroke-width: 1; filter: url(#shadow); }
+      .panel-soft { fill: #101a21; stroke: #0e594f; stroke-width: 1; }
+      .input { fill: #061115; stroke: #075c51; stroke-width: 1; }
+      .muted { fill: #8aa09b; font: 600 17px "Segoe UI", Arial, sans-serif; }
+      .label { fill: #8aa09b; font: 700 14px "Segoe UI", Arial, sans-serif; letter-spacing: 5px; }
+      .title { fill: #f3fff9; font: 800 40px "Segoe UI", Arial, sans-serif; }
+      .h2 { fill: #f3fff9; font: 800 22px "Segoe UI", Arial, sans-serif; }
+      .value { fill: #f3fff9; font: 900 44px "Segoe UI", Arial, sans-serif; }
+      .small { fill: #a9bbb6; font: 700 15px "Segoe UI", Arial, sans-serif; }
+      .mono { fill: #f3fff9; font: 800 32px Consolas, "Segoe UI Mono", monospace; }
+      .green { fill: #00ff9c; }
+      .pill { fill: #123027; stroke: #107a62; stroke-width: 1; }
+      .danger { fill: #ff756d; }
+      .button { fill: #142b2b; stroke: #187360; stroke-width: 1; }
+      .chart-line-a { fill: none; stroke: #20ffb0; stroke-width: 4; stroke-linejoin: round; }
+      .chart-line-b { fill: none; stroke: #39e5ff; stroke-width: 4; stroke-linejoin: round; }
+      .chart-line-c { fill: none; stroke: #ffd166; stroke-width: 4; stroke-linejoin: round; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1600" height="820"/>
+  <rect class="rail" width="72" height="820"/>
+
+  <rect x="12" y="18" width="46" height="46" rx="14" fill="#08251c" stroke="#0aa879"/>
+  <text x="35" y="48" text-anchor="middle" class="green" style="font: 900 17px 'Segoe UI', Arial, sans-serif;">BA</text>
+  <g fill="#101b20">
+    <rect x="8" y="92" width="56" height="56" rx="15"/>
+    <rect x="8" y="158" width="56" height="56" rx="15"/>
+    <rect x="8" y="224" width="56" height="56" rx="15"/>
+    <rect x="8" y="290" width="56" height="56" rx="15"/>
+    <rect x="8" y="356" width="56" height="56" rx="15"/>
+  </g>
+  <g class="small" text-anchor="middle" style="font-size:13px">
+    <text x="36" y="126">SM</text>
+    <text x="36" y="192">KP</text>
+    <text x="36" y="258">TR</text>
+    <text x="36" y="324">DM</text>
+    <text x="36" y="390">CF</text>
+  </g>
+
+  <rect x="92" y="24" width="1305" height="46" rx="11" class="input"/>
+  <circle cx="117" cy="47" r="7" fill="none" stroke="#00d99a" stroke-width="3"/>
+  <path d="M123 53 L131 61" stroke="#00d99a" stroke-width="3" stroke-linecap="round"/>
+  <text x="146" y="54" class="muted">Search sections, metrics, or controls</text>
+
+  <rect x="1415" y="18" width="165" height="60" rx="15" class="panel-soft"/>
+  <rect x="1428" y="28" width="40" height="40" rx="12" fill="#0c372c" stroke="#0aa879"/>
+  <text x="1448" y="53" text-anchor="middle" class="green" style="font: 900 13px 'Segoe UI', Arial, sans-serif;">OP</text>
+  <text x="1478" y="42" class="h2" style="font-size:16px">Operations Console</text>
+  <text x="1478" y="64" class="muted" style="font-size:14px">Sanitized preview</text>
+
+  <rect x="92" y="94" width="1488" height="315" rx="16" class="panel"/>
+  <text x="112" y="126" class="label">CYBERNETIC CONTROL PLANE</text>
+  <text x="112" y="166" class="title">Bitaxe Agent Dashboard</text>
+  <text x="112" y="196" class="muted">Miner http://miner.local is running at a guarded tuning profile with private telemetry hidden.</text>
+
+  <g transform="translate(112 220)">
+    <rect width="76" height="36" rx="18" class="pill"/><circle cx="18" cy="18" r="5" class="green"/><text x="34" y="23" class="green" style="font: 800 13px 'Segoe UI', Arial, sans-serif;">Online</text>
+    <rect x="92" width="110" height="36" rx="18" class="pill"/><text x="110" y="23" class="small" style="font-size:13px">Mode: rules</text>
+    <rect x="216" width="106" height="36" rx="18" class="pill"/><text x="234" y="23" class="small" style="font-size:13px">Dry Run: On</text>
+    <rect x="336" width="112" height="36" rx="18" class="pill"/><text x="354" y="23" class="small" style="font-size:13px">Fan: Auto</text>
+    <rect x="462" width="165" height="36" rx="18" class="pill"/><text x="480" y="23" class="small" style="font-size:13px">Stability: expected</text>
+    <rect x="642" width="158" height="36" rx="18" class="pill"/><text x="660" y="23" class="green" style="font: 800 13px 'Segoe UI', Arial, sans-serif;">Domain Guard: Stable</text>
+  </g>
+
+  <rect x="1016" y="114" width="545" height="265" rx="16" class="panel-soft"/>
+  <text x="1036" y="144" class="label">AGENT INTENT</text>
+  <text x="1036" y="166" class="h2">Hold steady while safety rails are green</text>
+  <text x="1036" y="229" class="mono">{ "autofanspeed": true }</text>
+  <rect x="1036" y="248" width="505" height="46" rx="10" fill="#14272b" stroke="#0e594f"/>
+  <text x="1050" y="277" class="small">Sanitized preview: exact power, IP, and timestamps removed.</text>
+  <rect x="1036" y="312" width="122" height="44" rx="10" class="button"/>
+  <text x="1052" y="340" class="h2" style="font-size:15px">Restart Controller</text>
+  <rect x="1170" y="312" width="104" height="44" rx="10" class="danger"/>
+  <text x="1186" y="340" fill="#120807" style="font: 800 15px 'Segoe UI', Arial, sans-serif;">Restart Miner</text>
+
+  <g transform="translate(92 426)">
+    <rect width="365" height="160" rx="14" class="panel-soft"/>
+    <text x="20" y="32" class="label">TEMP</text><text x="20" y="92" class="value">62.0C</text><text x="20" y="130" class="muted">Target 65C</text>
+    <rect x="380" width="365" height="160" rx="14" class="panel-soft"/>
+    <text x="400" y="32" class="label">HASHRATE</text><text x="400" y="92" class="value">1.0 TH/s</text><text x="400" y="130" class="muted">Expected range</text>
+    <rect x="760" width="365" height="160" rx="14" class="panel-soft"/>
+    <text x="780" y="32" class="label">POWER</text><text x="780" y="92" class="value">16 W</text><text x="780" y="130" class="muted">Under configured cap</text>
+    <rect x="1140" width="348" height="160" rx="14" class="panel-soft"/>
+    <text x="1160" y="32" class="label">FREQUENCY</text><text x="1160" y="92" class="value">525 MHz</text><text x="1160" y="130" class="muted">Guarded range</text>
+  </g>
+
+  <rect x="92" y="604" width="945" height="190" rx="14" class="panel-soft"/>
+  <text x="112" y="638" class="label">TREND ANALYSIS</text>
+  <text x="112" y="666" class="h2">Thermal And Power History</text>
+  <rect x="112" y="690" width="900" height="82" rx="12" fill="#071015"/>
+  <path d="M142 720 H230 L250 755 H365 L390 735 H510 L540 760 H680 L710 728 H920 L944 770" class="chart-line-a"/>
+  <path d="M142 720 H230 L250 735 H944" class="chart-line-b"/>
+  <path d="M142 720 H170 L190 748 H235 L258 770 H455 L482 792 H650 L685 766 H780 L800 750 H944" class="chart-line-c"/>
+
+  <g transform="translate(1050 604)">
+    <rect width="530" height="86" rx="14" class="panel-soft"/>
+    <text x="20" y="28" class="label">THERMAL HEADROOM</text>
+    <text x="20" y="52" class="h2">62C / 70C</text>
+    <rect x="20" y="66" width="490" height="12" rx="6" fill="#0d2a2b"/>
+    <rect x="20" y="66" width="410" height="12" rx="6" fill="url(#bar)"/>
+    <rect y="104" width="530" height="86" rx="14" class="panel-soft"/>
+    <text x="20" y="132" class="label">POWER HEADROOM</text>
+    <text x="20" y="156" class="h2">16 W / 18 W</text>
+    <rect x="20" y="170" width="490" height="12" rx="6" fill="#0d2a2b"/>
+    <rect x="20" y="170" width="430" height="12" rx="6" fill="url(#bar)"/>
+  </g>
+</svg>

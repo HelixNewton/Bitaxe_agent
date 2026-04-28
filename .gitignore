@@ -1,0 +1,11 @@
+node_modules/
+.env
+build/
+dist/
+__pycache__/
+*.py[cod]
+.codex
+*.spec.bak
+status.json
+learning.json
+startup.log

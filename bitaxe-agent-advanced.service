@@ -1,0 +1,16 @@
+[Unit]
+Description=Bitaxe Agent Advanced Controller
+After=network-online.target
+Wants=network-online.target
+Conflicts=bitaxe-agent.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/x/git/bitaxe-agent
+EnvironmentFile=/home/x/git/bitaxe-agent/.env
+ExecStart=/usr/bin/python3 /home/x/git/bitaxe-agent/deepseek_python_controller.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

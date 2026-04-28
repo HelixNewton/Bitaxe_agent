@@ -1,0 +1,188 @@
+Bitaxe Agent Windows Application Instructions
+
+Overview
+
+This Windows version is a separate application from the Linux systemd services.
+It runs:
+
+1. The Bitaxe controller loop
+2. The local dashboard UI
+
+Both run inside the same Windows application.
+
+
+Files
+
+- windows_app.py
+- windows.env.example
+- bitaxe-agent.spec
+- build_windows.bat
+
+
+What Is Updated In The Current Windows Version
+
+- The app now loads .env automatically on startup
+- If .env is missing, it creates one from windows.env.example
+- The packaged .exe now runs without a console window
+- The app now lives in the Windows system tray
+- Double-click the tray icon to open the dashboard
+- Right-click the tray icon for Open Dashboard and Exit
+- The dashboard includes:
+  - domain instability alerting
+  - Domain Guard status badge
+  - preset status detection
+  - restart controller button
+  - restart miner button
+  - current guardrail editing
+- The controller includes domain spread rollback guardrails
+
+
+How To Set The Bitaxe IP Address
+
+Option 1: Before starting the app
+
+1. Copy:
+   windows.env.example
+   to:
+   .env
+
+2. Open the new .env file in a text editor.
+
+3. Change the portable miner URL:
+   MINER_URL=http://192.168.1.50
+
+   to your real miner address, for example:
+   MINER_URL=http://192.168.1.50
+
+   BITAXE_URL is still supported as a backward-compatible alias.
+
+Older config style:
+   Change:
+   BITAXE_URL=http://192.168.1.50
+
+   to your real Bitaxe address, for example:
+   BITAXE_URL=http://192.168.1.50
+
+
+Option 2: From the app UI
+
+After the app is running, open:
+http://127.0.0.1:8787/
+
+Then edit:
+MINER_URL
+
+For AxeOS-compatible miners, the default paths are:
+- MINER_INFO_PATH=/api/system/info
+- MINER_ASIC_PATH=/api/system/asic
+- MINER_SETTINGS_PATH=/api/system
+- MINER_RESTART_PATH=/api/system/restart
+
+If another miner uses different HTTP paths but compatible telemetry fields and PATCH settings,
+change those paths in .env or in the dashboard config page.
+
+Save the config.
+
+
+Portable Use
+
+The .exe is portable:
+
+1. Copy dist\bitaxe-agent.exe to a folder.
+2. Start it once.
+3. It creates .env next to the .exe.
+4. Edit MINER_NAME, MINER_URL, and guardrails for that miner.
+
+Runtime files are also local to the .exe folder by default:
+- status.json
+- learning.json
+
+To keep separate learning files for different miners, set for example:
+
+   MINER_NAME=Garage Bitaxe
+   MINER_STATUS_FILE=status-garage.json
+   MINER_LEARNING_FILE=learning-garage.json
+
+
+Run Without Building An EXE
+
+On Windows, in this folder:
+
+1. Copy windows.env.example to .env
+2. Edit BITAXE_URL
+3. Run:
+
+   python windows_app.py
+
+4. Open:
+
+   http://127.0.0.1:8787/
+
+
+Build The Windows EXE
+
+Requirements:
+
+- Windows
+- Python installed
+- PyInstaller installed
+
+Install PyInstaller if needed:
+
+   python -m pip install pyinstaller
+
+Then build:
+
+   build_windows.bat
+
+Output:
+
+   dist\bitaxe-agent.exe
+
+
+How The EXE Works
+
+- The EXE reads settings from .env
+- The EXE writes runtime status to status.json
+- The dashboard is available at:
+  http://127.0.0.1:8787/
+
+
+Recommended First Start
+
+Use:
+BITAXE_DRY_RUN=true
+
+first, to confirm the app can talk to your Bitaxe safely.
+
+After that, if everything looks correct, change:
+
+BITAXE_DRY_RUN=false
+
+and restart the app.
+
+
+Current Suggested Guardrails
+
+- BITAXE_AUTO_FAN=true
+- BITAXE_MIN_FREQUENCY=500
+- BITAXE_MAX_FREQUENCY=545
+- BITAXE_FREQ_STEP=5
+- BITAXE_MIN_VOLTAGE=980
+- BITAXE_MAX_VOLTAGE=1100
+- BITAXE_VOLTAGE_STEP=5
+- BITAXE_TARGET_TEMP_C=65
+- BITAXE_HOT_TEMP_C=69
+- BITAXE_EMERGENCY_TEMP_C=70
+- BITAXE_MAX_VR_TEMP_C=70
+- BITAXE_MAX_POWER_W=16.5
+- BITAXE_MAX_ERROR_PERCENTAGE=20
+- BITAXE_MAX_DOMAIN_SPREAD_PERCENTAGE=10
+- BITAXE_CRITICAL_DOMAIN_SPREAD_PERCENTAGE=18
+- BITAXE_DOMAIN_SPREAD_POLLS=2
+
+
+Important Note
+
+A real Windows .exe must be built on a Windows machine.
+This project includes the files needed to build it, but the final .exe should be generated on Windows.
