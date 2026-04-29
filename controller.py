@@ -414,21 +414,22 @@ class LearningStore:
         return self.records.get(f"{frequency_mhz}:{voltage_mv}")
 
     def best_stable(self, config: Config) -> Optional[LearningRecord]:
+        max_unstable_rate = 0.20
         candidates = [
             record
             for record in self.records.values()
             if record.stable_samples >= config.learning_min_samples
-            and record.unstable_samples < config.learning_bad_limit
+            and (record.unstable_samples / max(1, record.samples)) <= max_unstable_rate
             and config.min_frequency <= record.frequency_mhz <= config.max_frequency
             and config.min_voltage <= record.voltage_mv <= config.max_voltage
             and record.max_power_w <= config.max_power_w
             and record.max_temperature_c < config.hot_temp_c
             and record.max_error_percentage < config.max_error_percentage
-            and record.max_domain_spread_percentage < config.max_domain_spread_percentage
+            and record.max_domain_spread_percentage < config.critical_domain_spread_percentage
         ]
         if not candidates:
             return None
-        return max(candidates, key=lambda record: (record.best_score, record.avg_score, record.best_hashrate_10m_gh, record.frequency_mhz))
+        return max(candidates, key=lambda record: (record.avg_score, record.best_score, record.avg_hashrate_10m_gh, record.frequency_mhz))
 
     def is_bad_candidate(self, frequency_mhz: int, voltage_mv: int, config: Config) -> bool:
         record = self.get(frequency_mhz, voltage_mv)
@@ -1080,7 +1081,7 @@ class Controller:
         fan = self.desired_fan(state)
         name = action.get("action", "hold")
         target_fan = action.get("target_fan_percent")
-        if target_fan is not None:
+        if target_fan is not None and not self.config.auto_fan:
             fan = clamp(int(target_fan), self.config.min_fan_percent, self.config.max_fan_percent)
 
         patch = self.build_patch(fan_percent=fan)
