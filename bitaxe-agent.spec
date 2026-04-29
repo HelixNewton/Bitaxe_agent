@@ -8,8 +8,6 @@ a = Analysis(
     datas=[
         ("windows.env.example", "."),
         ("WINDOWS.md", "."),
-        ("WINDOWS_INSTRUCTIONS.txt", "."),
-        ("WINDOWS_CODEX_BUILD_INSTRUCTIONS.md", "."),
         ("assets", "assets"),
     ],
     hiddenimports=[],

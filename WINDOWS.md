@@ -85,6 +85,6 @@ dist\bitaxe-agent.exe
 - The `.exe` must be built on Windows for a real Windows executable.
 - The app writes runtime state to `status.json` beside the executable.
 - The dashboard and controller run inside the same Windows application process.
-- The packaged build also includes `WINDOWS.md` and `WINDOWS_INSTRUCTIONS.txt`.
+- The packaged build also includes `WINDOWS.md`.
 - Double-click the tray icon to open the dashboard.
 - Right-click the tray icon for `Open Dashboard` and `Exit`.

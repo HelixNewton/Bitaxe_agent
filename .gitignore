@@ -4,7 +4,6 @@ build/
 dist/
 __pycache__/
 *.py[cod]
-.codex
 *.spec.bak
 status.json
 learning.json
