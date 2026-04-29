@@ -340,20 +340,20 @@ def html() -> str:
               </div>
               <div id=\"presetStatus\" class=\"decision-hint\">Computing saved profile alignment.</div>
               <div class=\"preset-grid\">
-                <div class=\"preset\" data-preset-card=\"safe\">
-                  <div class=\"eyebrow\">Safe</div>
+                <div class=\"preset\" data-preset-card=\"cool\">
+                  <div class=\"eyebrow\">Cool</div>
                   <p>Stability-first rails with tighter thermals and reduced power demand.</p>
-                  <button type=\"button\" class=\"btn-secondary\" data-preset=\"safe\">Apply Safe</button>
+                  <button type=\"button\" class=\"btn-secondary\" data-preset=\"cool\">Apply Cool</button>
                 </div>
                 <div class=\"preset\" data-preset-card=\"balanced\">
                   <div class=\"eyebrow\">Balanced</div>
                   <p>Moderate climb behavior with rollback logic tuned for daily operation.</p>
                   <button type=\"button\" class=\"btn-secondary\" data-preset=\"balanced\">Apply Balanced</button>
                 </div>
-                <div class=\"preset\" data-preset-card=\"aggressive\">
-                  <div class=\"eyebrow\">Aggressive</div>
+                <div class=\"preset\" data-preset-card=\"performance\">
+                  <div class=\"eyebrow\">Performance</div>
                   <p>Higher throughput ceiling for test conditions with wider thermal allowance.</p>
-                  <button type=\"button\" data-preset=\"aggressive\">Apply Aggressive</button>
+                  <button type=\"button\" data-preset=\"performance\">Apply Performance</button>
                 </div>
               </div>
             </div>
@@ -477,7 +477,7 @@ def html() -> str:
       \"Power And Stability\": [\"BITAXE_MIN_INPUT_VOLTAGE_MV\", \"BITAXE_MAX_POWER_W\", \"BITAXE_ABSOLUTE_MAX_POWER_W\", \"BITAXE_CLIMB_POWER_RATIO\", \"BITAXE_MAX_ERROR_PERCENTAGE\", \"BITAXE_MAX_DOMAIN_SPREAD_PERCENTAGE\", \"BITAXE_CRITICAL_DOMAIN_SPREAD_PERCENTAGE\", \"BITAXE_DOMAIN_SPREAD_POLLS\", \"BITAXE_LEARNING_ENABLED\", \"BITAXE_LEARNING_MIN_SAMPLES\", \"BITAXE_LEARNING_BAD_LIMIT\", \"BITAXE_LEARNING_RESTORE_MARGIN\", \"BITAXE_LEARNING_EFFICIENCY_WEIGHT\", \"BITAXE_ADAPTIVE_COOLDOWN_ENABLED\", \"BITAXE_ADAPTIVE_MIN_COOLDOWN_SECONDS\", \"BITAXE_ADAPTIVE_MAX_COOLDOWN_SECONDS\", \"BITAXE_ADAPTIVE_STABLE_SAMPLES\", \"BITAXE_MIN_FAN_PERCENT\", \"BITAXE_MAX_FAN_PERCENT\", \"BITAXE_STEP_COOLDOWN_SECONDS\"]
     };
     const presets = {
-      safe: {
+      cool: {
         BITAXE_MAX_FREQUENCY: \"525\",
         BITAXE_MAX_VOLTAGE: \"1060\",
         BITAXE_COOL_TEMP_C: \"61\",
@@ -486,14 +486,14 @@ def html() -> str:
         BITAXE_STEP_COOLDOWN_SECONDS: \"240\"
       },
       balanced: {
-        BITAXE_MAX_FREQUENCY: \"545\",
-        BITAXE_MAX_VOLTAGE: \"1100\",
+        BITAXE_MAX_FREQUENCY: \"535\",
+        BITAXE_MAX_VOLTAGE: \"1090\",
         BITAXE_COOL_TEMP_C: \"63\",
         BITAXE_MAX_POWER_W: \"16.5\",
         BITAXE_MAX_ERROR_PERCENTAGE: \"20\",
         BITAXE_STEP_COOLDOWN_SECONDS: \"180\"
       },
-      aggressive: {
+      performance: {
         BITAXE_MAX_FREQUENCY: \"575\",
         BITAXE_MAX_VOLTAGE: \"1125\",
         BITAXE_COOL_TEMP_C: \"64\",

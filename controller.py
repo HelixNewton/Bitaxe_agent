@@ -7,7 +7,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
-from urllib import error, request
+from urllib import error, parse, request
 
 
 def app_base_dir() -> str:
@@ -46,6 +46,76 @@ def env_path(*names: str, default_name: str) -> str:
     if os.path.isabs(value):
         return value
     return os.path.join(app_base_dir(), value)
+
+
+SENSITIVE_RAW_KEY_PARTS = {
+    "cert",
+    "coinbase",
+    "hostname",
+    "mac",
+    "script",
+    "ssid",
+    "stratumurl",
+    "stratumuser",
+    "user",
+}
+
+SENSITIVE_RAW_KEYS = {
+    "dnsserver",
+    "fallbackstratumcert",
+    "fallbackstratumurl",
+    "fallbackstratumuser",
+    "gateway",
+    "hostname",
+    "ip",
+    "ipv4",
+    "ipv6",
+    "macaddr",
+    "netmask",
+    "scriptsig",
+    "ssid",
+    "stratumcert",
+    "stratumurl",
+    "stratumuser",
+}
+
+
+def ensure_parent_dir(path: str) -> None:
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
+def is_sensitive_key(key: str) -> bool:
+    normalized = "".join(char for char in key.lower() if char.isalnum())
+    if normalized in SENSITIVE_RAW_KEYS:
+        return True
+    if normalized.endswith("address") or normalized.endswith("addr"):
+        return True
+    return any(part in normalized for part in SENSITIVE_RAW_KEY_PARTS)
+
+
+def sanitize_raw(value: Any, key: str = "") -> Any:
+    if key and is_sensitive_key(key):
+        return "[redacted]"
+    if isinstance(value, dict):
+        return {item_key: sanitize_raw(item_value, item_key) for item_key, item_value in value.items()}
+    if isinstance(value, list):
+        return [sanitize_raw(item) for item in value]
+    return value
+
+
+def redact_url(url: str) -> str:
+    try:
+        parsed = parse.urlsplit(url)
+    except ValueError:
+        return "[redacted]"
+    if not parsed.scheme or not parsed.netloc:
+        return "[redacted]"
+    hostname = "miner.local"
+    if parsed.port:
+        hostname = f"{hostname}:{parsed.port}"
+    return parse.urlunsplit((parsed.scheme, hostname, parsed.path, "", ""))
 
 
 @dataclass
@@ -357,6 +427,7 @@ class LearningStore:
             "records": [asdict(record) for record in self.records.values()],
         }
         tmp_path = f"{self.path}.tmp"
+        ensure_parent_dir(self.path)
         with open(tmp_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
         os.replace(tmp_path, self.path)
@@ -1156,10 +1227,13 @@ class Controller:
         next_change_at = None
         if self.last_change_at:
             next_change_at = self.last_change_at + self.adaptive_cooldown_seconds(self.last_state)
+        state = asdict(self.last_state) if self.last_state else None
+        if state and "raw" in state:
+            state["raw"] = sanitize_raw(state["raw"])
         status = {
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "config": {
-                "bitaxe_url": self.config.bitaxe_url,
+                "bitaxe_url": redact_url(self.config.bitaxe_url),
                 "miner_name": self.config.miner_name,
                 "miner_api_profile": self.config.miner_api_profile,
                 "info_path": self.config.info_path,
@@ -1217,9 +1291,10 @@ class Controller:
             "headroom": self.headroom(self.last_state) if self.last_state else None,
             "climb_power_gate_w": self.config.max_power_w * self.config.climb_power_ratio,
             "learning": self.learning.summary(self.config),
-            "state": asdict(self.last_state) if self.last_state else None,
+            "state": state,
         }
         tmp_path = f"{self.config.status_file}.tmp"
+        ensure_parent_dir(self.config.status_file)
         with open(tmp_path, "w", encoding="utf-8") as handle:
             json.dump(status, handle, indent=2)
         os.replace(tmp_path, self.config.status_file)

@@ -73,24 +73,23 @@ Both services run on the machine where you install them, not on the Bitaxe itsel
 - `bitaxe-agent.service`: the controller loop that polls and tunes the miner
 - `bitaxe-agent-ui.service`: the local dashboard on port `8787` by default
 
-They expect:
+The checked-in service files are examples and expect:
 
 - project path: `/home/x/git/bitaxe_agent`
 - env file: `/home/x/git/bitaxe_agent/.env`
 
-Example install:
+Portable install for the current checkout:
 
 ```bash
-sudo cp bitaxe-agent.service /etc/systemd/system/
-sudo cp bitaxe-agent-ui.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now bitaxe-agent
-sudo systemctl enable --now bitaxe-agent-ui
+chmod +x install_linux.sh
+./install_linux.sh
 sudo systemctl status bitaxe-agent
 sudo systemctl status bitaxe-agent-ui
 ```
 
 After that, open `http://YOUR-HOST-IP:8787/` in a browser on your LAN.
+
+The installer generates systemd units for the current checkout path, so the folder can be named `bitaxe_agent`, `Bitaxe_agent`, or anything else. It also creates local `status.json` and `learning.json` files if they do not exist.
 
 ## AI mode
 
@@ -151,6 +150,22 @@ BITAXE_ABSOLUTE_MAX_VR_TEMP_C=75
 The learning score is risk-adjusted. It rewards stable 10-minute hashrate and GH/W, then subtracts penalties for high power, high fan, high temperature, error rate, and domain imbalance.
 
 `BITAXE_CLIMB_POWER_RATIO` controls how much of the configured power budget may be used before the controller is allowed to raise frequency. For example, `BITAXE_MAX_POWER_W=17.5` and `BITAXE_CLIMB_POWER_RATIO=0.95` gives a climb gate of `16.625W`.
+
+## Operating Profiles
+
+These are starting points, not promises. Cooling, PSU quality, ambient temperature, and board silicon all matter.
+
+| Profile | Max frequency | Max voltage | Cool temp | Max power | Cooldown |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Cool | 525 MHz | 1060 mV | 61C | 15.5 W | 240 s |
+| Balanced | 535 MHz | 1090 mV | 63C | 16.5 W | 180 s |
+| Performance | 575 MHz | 1125 mV | 64C | 17.5 W | 120 s |
+
+The included `.env.example` defaults to the balanced profile with slightly slower domain-spread confirmation, which is a better daily baseline after an overnight run than pushing straight to the highest observed hashrate. The dashboard preset buttons can apply these values to `.env`; restart `bitaxe-agent` after saving.
+
+## Runtime Privacy
+
+The private `.env` file is ignored by Git. Runtime `status.json` is also generated locally and now redacts common sensitive raw telemetry fields such as Wi-Fi identifiers, MAC/IP values, pool usernames, stratum URLs, scripts, certificates, and coinbase output data before the dashboard exposes the raw status panel.
 
 ## Notes
 
