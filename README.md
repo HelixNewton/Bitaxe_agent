@@ -75,8 +75,8 @@ Both services run on the machine where you install them, not on the Bitaxe itsel
 
 They expect:
 
-- project path: `/home/x/git/bitaxe-agent`
-- env file: `/home/x/git/bitaxe-agent/.env`
+- project path: `/home/x/git/bitaxe_agent`
+- env file: `/home/x/git/bitaxe_agent/.env`
 
 Example install:
 

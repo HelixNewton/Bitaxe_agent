@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/x/git/bitaxe-agent
-EnvironmentFile=/home/x/git/bitaxe-agent/.env
-ExecStart=/usr/bin/python3 /home/x/git/bitaxe-agent/ui_server.py
+WorkingDirectory=/home/x/git/bitaxe_agent
+EnvironmentFile=/home/x/git/bitaxe_agent/.env
+ExecStart=/usr/bin/python3 /home/x/git/bitaxe_agent/ui_server.py
 Restart=always
 RestartSec=10
 
