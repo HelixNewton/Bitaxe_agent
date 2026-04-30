@@ -177,11 +177,9 @@ The private `.env` file is ignored by Git. Runtime `status.json` is also generat
 
 ## Support
 
-If this project helps you keep your miner cooler, safer, or just a little less dramatic, donations are welcome:
+If this project helps you keep your miner cooler, safer, or just a little less dramatic, you can support it here:
 
-```text
-BTC: bc1qey94gfjas0hcdj3vh8u56yjx7030j59pyvd4hr
-```
+[Buy me a coffee](https://buymeacoffee.com/sx8yfh9zrbs)
 
 ## References
 
