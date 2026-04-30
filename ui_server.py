@@ -3,6 +3,8 @@ import json
 import os
 import subprocess
 import sys
+import time
+from functools import lru_cache
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -88,6 +90,78 @@ EDITABLE_KEYS = {
     "BITAXE_USE_ASIC_OPTIONS",
 }
 
+CONFIG_RANGES = {
+    "MINER_UI_PORT": (1, 65535),
+    "BITAXE_LOOP_SECONDS": (5, 3600),
+    "BITAXE_MIN_FREQUENCY": (300, 800),
+    "BITAXE_MAX_FREQUENCY": (300, 800),
+    "BITAXE_ABSOLUTE_MAX_FREQUENCY": (300, 800),
+    "BITAXE_FREQ_STEP": (1, 100),
+    "BITAXE_MIN_VOLTAGE": (800, 1400),
+    "BITAXE_MAX_VOLTAGE": (800, 1400),
+    "BITAXE_ABSOLUTE_MAX_VOLTAGE": (800, 1400),
+    "BITAXE_VOLTAGE_STEP": (1, 100),
+    "BITAXE_TARGET_TEMP_C": (40, 85),
+    "BITAXE_HOT_TEMP_C": (45, 90),
+    "BITAXE_EMERGENCY_TEMP_C": (50, 95),
+    "BITAXE_ABSOLUTE_MAX_EMERGENCY_TEMP_C": (50, 95),
+    "BITAXE_COOL_TEMP_C": (30, 85),
+    "BITAXE_MAX_VR_TEMP_C": (40, 100),
+    "BITAXE_ABSOLUTE_MAX_VR_TEMP_C": (40, 100),
+    "BITAXE_MIN_INPUT_VOLTAGE_MV": (4000, 6000),
+    "BITAXE_MAX_POWER_W": (5, 30),
+    "BITAXE_ABSOLUTE_MAX_POWER_W": (5, 30),
+    "BITAXE_CLIMB_POWER_RATIO": (0.5, 0.99),
+    "BITAXE_MAX_ERROR_PERCENTAGE": (0, 100),
+    "BITAXE_MAX_DOMAIN_SPREAD_PERCENTAGE": (0, 100),
+    "BITAXE_CRITICAL_DOMAIN_SPREAD_PERCENTAGE": (0, 100),
+    "BITAXE_DOMAIN_SPREAD_POLLS": (1, 20),
+    "BITAXE_LEARNING_MIN_SAMPLES": (1, 1000),
+    "BITAXE_LEARNING_BAD_LIMIT": (1, 1000),
+    "BITAXE_LEARNING_RESTORE_MARGIN": (0, 1),
+    "BITAXE_LEARNING_EFFICIENCY_WEIGHT": (0, 1),
+    "BITAXE_ADAPTIVE_MIN_COOLDOWN_SECONDS": (1, 3600),
+    "BITAXE_ADAPTIVE_MAX_COOLDOWN_SECONDS": (1, 7200),
+    "BITAXE_ADAPTIVE_STABLE_SAMPLES": (1, 1000),
+    "BITAXE_MIN_FAN_PERCENT": (0, 100),
+    "BITAXE_MAX_FAN_PERCENT": (0, 100),
+    "BITAXE_STEP_COOLDOWN_SECONDS": (1, 7200),
+}
+
+BOOLEAN_KEYS = {
+    "BITAXE_DRY_RUN",
+    "BITAXE_AUTO_FAN",
+    "BITAXE_USE_ASIC_OPTIONS",
+    "BITAXE_LEARNING_ENABLED",
+    "BITAXE_ADAPTIVE_COOLDOWN_ENABLED",
+}
+
+MODE_VALUES = {"rules", "openai"}
+
+
+def sanitize_env_value(key: str, value: str) -> str:
+    cleaned = value.strip()
+    if any(char in cleaned for char in ("\x00", "\n", "\r")):
+        raise ValueError(f"{key} cannot contain line breaks")
+    if any(char in cleaned for char in (";", "&", "|", "`", "$", "<", ">")):
+        raise ValueError(f"{key} contains an unsupported shell-control character")
+    return cleaned
+
+
+def validate_config_value(key: str, value: str) -> None:
+    if key in BOOLEAN_KEYS and value.strip().lower() not in {"1", "0", "true", "false", "yes", "no", "on", "off"}:
+        raise ValueError(f"{key} must be a boolean")
+    if key == "BITAXE_MODE" and value.strip().lower() not in MODE_VALUES:
+        raise ValueError(f"{key} must be one of: {', '.join(sorted(MODE_VALUES))}")
+    if key in CONFIG_RANGES:
+        try:
+            number = float(value)
+        except ValueError as exc:
+            raise ValueError(f"{key} must be a number") from exc
+        lower, upper = CONFIG_RANGES[key]
+        if number < lower or number > upper:
+            raise ValueError(f"{key} must be between {lower} and {upper}")
+
 
 def parse_env_file() -> dict[str, str]:
     values: dict[str, str] = {}
@@ -101,11 +175,17 @@ def parse_env_file() -> dict[str, str]:
     return values
 
 
-def write_env_file(updates: dict[str, str]) -> None:
+def write_env_file(updates: dict[str, str]) -> dict[str, str]:
     existing = parse_env_file()
-    existing.update(updates)
+    validated: dict[str, str] = {}
+    for key, value in updates.items():
+        cleaned = sanitize_env_value(key, value)
+        validate_config_value(key, cleaned)
+        validated[key] = cleaned
+    existing.update(validated)
     lines = [f"{key}={value}" for key, value in existing.items()]
     ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return validated
 
 
 def read_status() -> dict:
@@ -130,15 +210,27 @@ def read_asset(path: str) -> tuple[bytes, str]:
     return candidate.read_bytes(), content_type
 
 
-def post_json(url: str) -> dict:
+@lru_cache(maxsize=64)
+def read_asset_cached(path: str) -> tuple[bytes, str]:
+    return read_asset(path)
+
+
+def post_json(url: str, max_retries: int = 2) -> dict:
     req = request.Request(url, data=b"", method="POST")
-    try:
-        with request.urlopen(req, timeout=10) as response:
-            text = response.read().decode("utf-8")
-            return json.loads(text) if text else {"ok": True}
-    except error.HTTPError as exc:
-        text = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"HTTP {exc.code}: {text or exc.reason}") from exc
+    req.add_header("Connection", "close")
+    for attempt in range(max_retries + 1):
+        try:
+            with request.urlopen(req, timeout=5) as response:
+                text = response.read().decode("utf-8")
+                return json.loads(text) if text else {"ok": True}
+        except error.HTTPError as exc:
+            text = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"HTTP {exc.code}: {text or exc.reason}") from exc
+        except (TimeoutError, error.URLError) as exc:
+            if attempt >= max_retries:
+                raise RuntimeError(f"miner request failed after {max_retries + 1} attempts: {exc}") from exc
+            time.sleep(0.5 * (attempt + 1))
+    return {"ok": True}
 
 
 def restart_controller_service() -> dict:
@@ -170,7 +262,10 @@ def html() -> str:
 <head>
   <meta charset=\"utf-8\">
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <meta name=\"theme-color\" content=\"#0d1218\">
+  <meta name=\"description\" content=\"Bitaxe Agent dashboard for guarded miner tuning and telemetry\">
   <title>Bitaxe Agent</title>
+  <link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230d1218'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='34' font-family='Arial' font-weight='700' fill='%2300ff9c'%3EBA%3C/text%3E%3C/svg%3E\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard.css\">
 </head>
 <body>
@@ -512,6 +607,7 @@ def html() -> str:
     let chartVisible = false;
     let lastConfigSignature = \"\";
     let lastOverviewSignature = \"\";
+    let reconnectAttempts = 0;
 
     const dom = {
       overview: document.getElementById(\"overview\"),
@@ -600,10 +696,19 @@ def html() -> str:
       return Number.isFinite(number) ? `${(number * 100).toFixed(1)}%` : \"-\";
     }
 
-    async function fetchJson(path, options) {
-      const response = await fetch(path, options);
-      if (!response.ok) throw new Error(await response.text());
-      return response.json();
+    async function fetchJson(path, options = {}, retries = 2) {
+      for (let attempt = 0; attempt <= retries; attempt += 1) {
+        try {
+          const response = await fetch(path, options);
+          if (!response.ok) throw new Error(await response.text());
+          reconnectAttempts = 0;
+          return response.json();
+        } catch (error) {
+          if (attempt >= retries) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+        }
+      }
+      throw new Error(\"request failed\");
     }
 
     async function postAction(action) {
@@ -901,7 +1006,21 @@ def html() -> str:
     }
 
     async function refresh() {
-      const [status, config] = await Promise.all([fetchJson(\"/api/status\"), fetchJson(\"/api/config\")]);
+      let status;
+      let config;
+      try {
+        [status, config] = await Promise.all([fetchJson(\"/api/status\"), fetchJson(\"/api/config\")]);
+      } catch (error) {
+        reconnectAttempts += 1;
+        dom.health.className = \"status-pill hot\";
+        dom.health.innerHTML = `<span class=\"pulse\"></span><span>Connection Lost</span>`;
+        dom.updatedAt.textContent = `Retrying dashboard connection (${reconnectAttempts})`;
+        setActionMessage(\"Lost connection to the UI server. Retrying...\", true);
+        return;
+      }
+      if (dom.actionMessage.textContent.startsWith(\"Lost connection\")) {
+        setActionMessage(\"Dashboard connection restored.\");
+      }
       const state = status.state || {};
       const decision = status.last_decision || {};
       const expected = Number(state.raw?.expectedHashrate) || 0;
@@ -1093,13 +1212,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path.startswith("/assets/"):
             try:
-                body, content_type = read_asset(path)
+                body, content_type = read_asset_cached(path)
             except FileNotFoundError:
                 self._send_json({"error": "not found"}, status=404)
                 return
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "public, max-age=3600")
             self.end_headers()
             self.wfile.write(body)
             return
@@ -1122,8 +1242,8 @@ class Handler(BaseHTTPRequestHandler):
                 for key, value in payload.items():
                     if key in EDITABLE_KEYS:
                         updates[key] = str(value)
-                write_env_file(updates)
-                self._send_json({"ok": True, "updated": updates})
+                validated = write_env_file(updates)
+                self._send_json({"ok": True, "updated": validated})
                 return
             if path == "/api/action":
                 action = payload.get("action")
