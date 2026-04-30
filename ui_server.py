@@ -267,6 +267,7 @@ def html() -> str:
   <title>Bitaxe Agent</title>
   <link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230d1218'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='34' font-family='Arial' font-weight='700' fill='%2300ff9c'%3EBA%3C/text%3E%3C/svg%3E\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard.css\">
+  <link rel=\"stylesheet\" href=\"/assets/dashboard-polish.css\">
 </head>
 <body>
   <div class=\"app-shell\">
@@ -432,6 +433,14 @@ def html() -> str:
                   <div class=\"eyebrow\">Tuning Profile</div>
                   <h2 class=\"heading-md\">Preset Control</h2>
                 </div>
+              </div>
+              <div class=\"advisor-card\" id=\"profileAdvisor\">
+                <div>
+                  <div class=\"eyebrow\">Profile Advisor</div>
+                  <h3 id=\"advisorTitle\">Waiting for learning data</h3>
+                  <p id=\"advisorText\">The controller will compare learned stability, thermal headroom, power, and domain spread.</p>
+                </div>
+                <span class=\"advisor-badge\" id=\"advisorBadge\">Sync</span>
               </div>
               <div id=\"presetStatus\" class=\"decision-hint\">Computing saved profile alignment.</div>
               <div class=\"preset-grid\">
@@ -638,6 +647,10 @@ def html() -> str:
       tuningLabel: document.getElementById(\"tuningLabel\"),
       domainAlert: document.getElementById(\"domainAlert\"),
       domainGrid: document.getElementById(\"domainGrid\"),
+      profileAdvisor: document.getElementById(\"profileAdvisor\"),
+      advisorTitle: document.getElementById(\"advisorTitle\"),
+      advisorText: document.getElementById(\"advisorText\"),
+      advisorBadge: document.getElementById(\"advisorBadge\"),
       presetStatus: document.getElementById(\"presetStatus\"),
       details: document.getElementById(\"details\"),
       errorValue: document.getElementById(\"errorValue\"),
@@ -862,7 +875,7 @@ def html() -> str:
         const stateClass = isOffline ? \"hot\" : deviation >= 18 ? \"hot\" : deviation >= 10 ? \"warn\" : \"\";
         const stateText = isOffline ? \"offline\" : deviation >= 18 ? \"weak\" : deviation >= 10 ? \"watch\" : \"healthy\";
         return `
-          <div class=\"domain-card ${isOffline ? \"offline\" : \"\"}\">
+          <div class=\"domain-card ${isOffline ? \"offline\" : stateClass}\">
             <div class=\"mini-label\">Domain ${index + 1}</div>
             <div class=\"domain-value\">${value.toFixed(1)}</div>
             <div class=\"muted\">GH/s</div>
@@ -891,6 +904,48 @@ def html() -> str:
       dom.presetStatus.textContent = active.distance === 0
         ? `Current preset: ${active.name}. Saved config exactly matches the profile.`
         : `Closest preset: ${active.name}. ${matched}/${total} profile fields match the saved rails.`;
+    }
+
+    function renderProfileAdvisor(state, status) {
+      const temp = Number(state.temperature_c);
+      const power = Number(state.power_w);
+      const fan = Number(state.fan_percent);
+      const spread = Number(state.domain_spread_percentage);
+      const maxSpread = Number(status.config?.max_domain_spread_percentage) || 12;
+      const target = Number(status.config?.target_temp_c) || 65;
+      const powerCap = Number(status.config?.max_power_w) || 16.5;
+      const best = status.learning?.best_stable;
+      let tone = \"ok\";
+      let title = \"Hold Balanced\";
+      let text = \"Learning data says the miner is inside daily operating rails. Keep collecting samples.\";
+      let badge = \"Balanced\";
+
+      if (!Number.isFinite(temp) || !Number.isFinite(power)) {
+        tone = \"sync\";
+        title = \"Waiting for telemetry\";
+        text = \"The advisor will activate once status.json includes live temperature, power, and learning data.\";
+        badge = \"Sync\";
+      } else if (spread >= maxSpread || fan >= 98 || temp >= target || power >= powerCap * 0.96) {
+        tone = \"warn\";
+        title = \"Cooling Headroom Tight\";
+        text = `Hold or step down if this persists. Fan ${Number.isFinite(fan) ? fan.toFixed(0) : \"-\"}%, temp ${temp.toFixed(1)}C, domain spread ${Number.isFinite(spread) ? spread.toFixed(1) : \"-\"}%.`;
+        badge = \"Watch\";
+      } else if (best && Number(best.frequency_mhz) <= Number(state.frequency_mhz || 0)) {
+        tone = \"ok\";
+        title = \"Best Learned Range\";
+        text = `Best stable target is ${best.frequency_mhz} MHz / ${best.voltage_mv} mV with ${Number(best.best_hashrate_gh || 0).toFixed(1)} GH/s observed.`;
+        badge = \"Learned\";
+      } else if (temp < target - 4 && power < powerCap * 0.9 && spread < maxSpread * 0.75) {
+        tone = \"boost\";
+        title = \"Room to Test Upward\";
+        text = \"Thermal, power, and domain spread are clean enough for one cautious step after cooldown.\";
+        badge = \"Test\";
+      }
+
+      dom.profileAdvisor.className = `advisor-card ${tone}`;
+      dom.advisorTitle.textContent = title;
+      dom.advisorText.textContent = text;
+      dom.advisorBadge.textContent = badge;
     }
 
     function renderConfig(config) {
@@ -1037,6 +1092,7 @@ def html() -> str:
       renderOverview(state, status);
       renderDomains(state);
       renderPresetStatus(config);
+      renderProfileAdvisor(state, status);
       renderConfig(config);
       renderInfoRows(state, status, config);
 
