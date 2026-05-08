@@ -194,6 +194,23 @@ def read_status() -> dict:
     return json.loads(STATUS_FILE.read_text(encoding="utf-8"))
 
 
+def health_status() -> dict:
+    payload = {
+        "ok": True,
+        "ui": "running",
+        "status_file": str(STATUS_FILE),
+        "status_exists": STATUS_FILE.exists(),
+    }
+    if STATUS_FILE.exists():
+        age_seconds = max(0.0, time.time() - STATUS_FILE.stat().st_mtime)
+        payload["status_age_seconds"] = round(age_seconds, 3)
+        payload["controller_fresh"] = age_seconds <= 120
+    else:
+        payload["ok"] = False
+        payload["controller_fresh"] = False
+    return payload
+
+
 def read_asset(path: str) -> tuple[bytes, str]:
     relative = path.removeprefix("/assets/")
     candidate = (ASSETS_DIR / relative).resolve()
@@ -475,7 +492,9 @@ def html() -> str:
                 <div class=\"mini-card\"><div class=\"mini-label\">Error Percentage</div><div class=\"stat-value\" id=\"errorValue\">-</div><div class=\"muted\">Hardware error rate</div></div>
                 <div class=\"mini-card\"><div class=\"mini-label\">Expected Hashrate</div><div class=\"stat-value\" id=\"expectedValue\">-</div><div class=\"muted\">Theoretical throughput</div></div>
                 <div class=\"mini-card\"><div class=\"mini-label\">Best Difficulty</div><div class=\"stat-value\" id=\"bestDiffValue\">-</div><div class=\"muted\" id=\"bestDiffSubvalue\">-</div></div>
+                <div class=\"mini-card\"><div class=\"mini-label\">Solo Block Odds</div><div class=\"stat-value\" id=\"soloOddsValue\">-</div><div class=\"muted\" id=\"soloOddsSubvalue\">Network difficulty odds</div></div>
                 <div class=\"mini-card\"><div class=\"mini-label\">Response Time</div><div class=\"stat-value\" id=\"responseValue\">-</div><div class=\"muted\">Controller API latency</div></div>
+                <div class=\"mini-card\"><div class=\"mini-label\">Status Freshness</div><div class=\"stat-value\" id=\"statusFreshnessValue\">-</div><div class=\"muted\" id=\"statusFreshnessSubvalue\">Controller write age</div></div>
                 <div class=\"mini-card\"><div class=\"mini-label\">Advanced Health</div><div class=\"stat-value\" id=\"advancedHealthValue\">-</div><div class=\"muted\" id=\"advancedHealthSubvalue\">Controller health</div></div>
                 <div class=\"mini-card\"><div class=\"mini-label\">Climb Eligibility</div><div class=\"stat-value\" id=\"climbValue\">-</div><div class=\"muted\" id=\"climbSubvalue\">Power and guardrail gate</div></div>
                 <div class=\"mini-card\"><div class=\"mini-label\">Decisions</div><div class=\"stat-value\" id=\"decisionCountValue\">-</div><div class=\"muted\" id=\"decisionCountSubvalue\">Runtime decisions</div></div>
@@ -657,7 +676,11 @@ def html() -> str:
       expectedValue: document.getElementById(\"expectedValue\"),
       bestDiffValue: document.getElementById(\"bestDiffValue\"),
       bestDiffSubvalue: document.getElementById(\"bestDiffSubvalue\"),
+      soloOddsValue: document.getElementById(\"soloOddsValue\"),
+      soloOddsSubvalue: document.getElementById(\"soloOddsSubvalue\"),
       responseValue: document.getElementById(\"responseValue\"),
+      statusFreshnessValue: document.getElementById(\"statusFreshnessValue\"),
+      statusFreshnessSubvalue: document.getElementById(\"statusFreshnessSubvalue\"),
       advancedHealthValue: document.getElementById(\"advancedHealthValue\"),
       advancedHealthSubvalue: document.getElementById(\"advancedHealthSubvalue\"),
       climbValue: document.getElementById(\"climbValue\"),
@@ -686,6 +709,12 @@ def html() -> str:
 
     function formatSeconds(totalSeconds) {
       const seconds = Math.max(0, Math.floor(totalSeconds));
+      const years = Math.floor(seconds / 31536000);
+      if (years >= 1) return `${years}y ${Math.floor((seconds % 31536000) / 86400)}d`;
+      const days = Math.floor(seconds / 86400);
+      if (days >= 1) return `${days}d ${Math.floor((seconds % 86400) / 3600)}h`;
+      const hours = Math.floor(seconds / 3600);
+      if (hours >= 1) return `${hours}h ${Math.floor((seconds % 3600) / 60)}m`;
       const minutes = Math.floor(seconds / 60);
       const remain = seconds % 60;
       return `${minutes}m ${remain}s`;
@@ -704,9 +733,24 @@ def html() -> str:
       return `${number.toFixed(4)}%`;
     }
 
+    function formatOdds(value) {
+      const percent = (Number(value) || 0) * 100;
+      if (percent >= 1) return `${percent.toFixed(2)}%`;
+      if (percent >= 0.01) return `${percent.toFixed(4)}%`;
+      return `${percent.toFixed(6)}%`;
+    }
+
     function formatRatio(value) {
       const number = Number(value);
       return Number.isFinite(number) ? `${(number * 100).toFixed(1)}%` : \"-\";
+    }
+
+    function blockOdds(hashrateGh, difficulty, seconds) {
+      const hashPerSecond = Number(hashrateGh) * 1e9;
+      const diff = Number(difficulty);
+      if (!hashPerSecond || !diff) return 0;
+      const expectedSeconds = (diff * 4294967296) / hashPerSecond;
+      return 1 - Math.exp(-seconds / expectedSeconds);
     }
 
     async function fetchJson(path, options = {}, retries = 2) {
@@ -1136,6 +1180,9 @@ def html() -> str:
       const bestSessionDiff = Number(state.raw?.bestSessionDiff) || 0;
       const networkDifficulty = Number(state.raw?.networkDifficulty) || 0;
       const uptimeSeconds = Number(state.raw?.uptimeSeconds) || 0;
+      const oddsHashrate = Number(state.hashrate_10m_gh) || Number(state.hashrate_gh) || 0;
+      const expectedBlockSeconds = oddsHashrate && networkDifficulty ? (networkDifficulty * 4294967296) / (oddsHashrate * 1e9) : 0;
+      const statusAgeSeconds = status.updated_at ? Math.max(0, (Date.now() - Date.parse(status.updated_at)) / 1000) : null;
       const healthInfo = status.health || {};
       const metricsInfo = status.metrics || {};
       const guardrailsInfo = status.guardrails || {};
@@ -1144,7 +1191,11 @@ def html() -> str:
       applyLiveText(dom.expectedValue, `${expected ? expected.toFixed(1) : \"-\"} GH/s`);
       applyLiveText(dom.bestDiffValue, `bestDiff ${formatCompactNumber(bestDiff)}`);
       dom.bestDiffSubvalue.innerHTML = `bestSessionDiff ${formatCompactNumber(bestSessionDiff)} (${formatSeconds(uptimeSeconds)})<br>all-time progress ${formatPercent(allTimePercent)}`;
+      applyLiveText(dom.soloOddsValue, networkDifficulty && oddsHashrate ? formatOdds(blockOdds(oddsHashrate, networkDifficulty, 86400)) : \"-\");
+      dom.soloOddsSubvalue.textContent = expectedBlockSeconds ? `per day / ${formatOdds(blockOdds(oddsHashrate, networkDifficulty, 31536000))} per year / avg ${formatSeconds(expectedBlockSeconds)}` : \"Waiting for difficulty and hashrate.\";
       applyLiveText(dom.responseValue, `${state.raw?.responseTime?.toFixed?.(1) ?? \"-\"} ms`);
+      applyLiveText(dom.statusFreshnessValue, statusAgeSeconds === null ? \"-\" : formatSeconds(statusAgeSeconds));
+      dom.statusFreshnessSubvalue.textContent = statusAgeSeconds === null ? \"No status timestamp yet.\" : (statusAgeSeconds > 120 ? \"Status is stale. Check controller service.\" : \"Status stream is fresh.\");
       applyLiveText(dom.advancedHealthValue, healthInfo.status || (status.last_error ? \"degraded\" : \"healthy\"));
       dom.advancedHealthSubvalue.textContent = `actions ${healthInfo.successful_actions ?? \"-\"} / uptime ${formatSeconds(healthInfo.uptime_seconds || 0)}`;
       applyLiveText(dom.climbValue, guardrailsInfo.can_climb === undefined ? \"-\" : (guardrailsInfo.can_climb ? \"Allowed\" : \"Blocked\"));
@@ -1281,6 +1332,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/status":
             self._send_json(read_status())
+            return
+        if path in {"/health", "/api/health"}:
+            health = health_status()
+            self._send_json(health, status=200 if health.get("ok") else 503)
             return
         if path == "/api/config":
             self._send_json(parse_env_file())
