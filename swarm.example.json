@@ -1,0 +1,18 @@
+{
+  "miners": [
+    {
+      "id": "primary",
+      "name": "Garage Bitaxe",
+      "url": "http://192.168.1.50",
+      "api_profile": "axeos",
+      "status_file": "status.json"
+    },
+    {
+      "id": "bench",
+      "name": "Bench Miner",
+      "url": "http://192.168.1.51",
+      "api_profile": "axeos",
+      "status_file": "status-bench.json"
+    }
+  ]
+}

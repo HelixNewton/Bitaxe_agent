@@ -126,6 +126,10 @@ class Config:
     info_path: str = "/api/system/info"
     asic_path: str = "/api/system/asic"
     settings_path: str = "/api/system"
+    frequency_field: str = "frequency"
+    voltage_field: str = "coreVoltage"
+    fan_speed_field: str = "fanspeed"
+    auto_fan_field: str = "autofanspeed"
     loop_seconds: int = 30
     mode: str = "rules"
     dry_run: bool = False
@@ -185,6 +189,10 @@ class Config:
             info_path=env_str("MINER_INFO_PATH", "BITAXE_INFO_PATH", default="/api/system/info") or "/api/system/info",
             asic_path=env_str("MINER_ASIC_PATH", "BITAXE_ASIC_PATH", default="/api/system/asic") or "/api/system/asic",
             settings_path=env_str("MINER_SETTINGS_PATH", "BITAXE_SETTINGS_PATH", default="/api/system") or "/api/system",
+            frequency_field=env_str("MINER_FREQUENCY_FIELD", default="frequency") or "frequency",
+            voltage_field=env_str("MINER_VOLTAGE_FIELD", default="coreVoltage") or "coreVoltage",
+            fan_speed_field=env_str("MINER_FAN_SPEED_FIELD", default="fanspeed") or "fanspeed",
+            auto_fan_field=env_str("MINER_AUTO_FAN_FIELD", default="autofanspeed") or "autofanspeed",
             loop_seconds=env_int("BITAXE_LOOP_SECONDS", 30),
             mode=os.getenv("BITAXE_MODE", "rules").strip().lower(),
             dry_run=env_bool("BITAXE_DRY_RUN", False),
@@ -765,14 +773,14 @@ class Controller:
     def build_patch(self, *, frequency: Optional[int] = None, voltage: Optional[int] = None, fan_percent: Optional[int] = None) -> Dict[str, Any]:
         payload: Dict[str, Any] = {}
         if frequency is not None:
-            payload["frequency"] = clamp(int(frequency), self.config.min_frequency, self.config.max_frequency)
+            payload[self.config.frequency_field] = clamp(int(frequency), self.config.min_frequency, self.config.max_frequency)
         if voltage is not None:
-            payload["coreVoltage"] = clamp(int(voltage), self.config.min_voltage, self.config.max_voltage)
+            payload[self.config.voltage_field] = clamp(int(voltage), self.config.min_voltage, self.config.max_voltage)
         if fan_percent is not None:
-            payload["fanspeed"] = clamp(int(fan_percent), self.config.min_fan_percent, self.config.max_fan_percent)
-            payload["autofanspeed"] = False
+            payload[self.config.fan_speed_field] = clamp(int(fan_percent), self.config.min_fan_percent, self.config.max_fan_percent)
+            payload[self.config.auto_fan_field] = False
         elif self.config.auto_fan:
-            payload["autofanspeed"] = True
+            payload[self.config.auto_fan_field] = True
         return payload
 
     def headroom(self, state: MinerState) -> Dict[str, float]:
@@ -1220,7 +1228,7 @@ class Controller:
         if patch:
             self.client.patch_system(patch)
             self.last_applied = patch
-            if "frequency" in patch or "coreVoltage" in patch:
+            if self.config.frequency_field in patch or self.config.voltage_field in patch:
                 self.last_change_at = time.time()
 
     def write_status(self) -> None:
@@ -1239,6 +1247,10 @@ class Controller:
                 "info_path": self.config.info_path,
                 "asic_path": self.config.asic_path,
                 "settings_path": self.config.settings_path,
+                "frequency_field": self.config.frequency_field,
+                "voltage_field": self.config.voltage_field,
+                "fan_speed_field": self.config.fan_speed_field,
+                "auto_fan_field": self.config.auto_fan_field,
                 "mode": self.config.mode,
                 "dry_run": self.config.dry_run,
                 "loop_seconds": self.config.loop_seconds,

@@ -91,6 +91,56 @@ After that, open `http://YOUR-HOST-IP:8787/` in a browser on your LAN.
 
 The installer generates systemd units for the current checkout path, so the folder can be named `bitaxe_agent`, `Bitaxe_agent`, or anything else. It also creates local `status.json` and `learning.json` files if they do not exist.
 
+## Swarm Dashboard
+
+The dashboard can monitor several miners at once by reading their local status files. Keep one controller process per miner so each device has its own guardrails, learning file, and status file.
+
+1. Copy `swarm.example.json` to `swarm.json`.
+2. Add one entry per miner with a unique `status_file`.
+3. Run a separate controller service for each miner, each with its own `.env` or environment file.
+
+Example swarm entry:
+
+```json
+{
+  "id": "garage",
+  "name": "Garage Bitaxe",
+  "url": "http://192.168.1.50",
+  "api_profile": "axeos",
+  "status_file": "status-garage.json"
+}
+```
+
+Supported miner profiles are:
+
+- `axeos`: AxeOS / ESP-Miner compatible Bitaxe devices
+- `generic-json`: read-compatible HTTP JSON miners where paths are configured manually
+- `futurebit` and `braiins`: placeholders for configured-path monitoring; write actions still require compatible fields
+
+For non-AxeOS miners, start with `BITAXE_DRY_RUN=true`, set `MINER_INFO_PATH`, `MINER_ASIC_PATH`, and `MINER_SETTINGS_PATH`, then verify the dashboard fields before allowing live control.
+
+If a miner accepts different setting keys, map them in `.env`:
+
+```env
+MINER_FREQUENCY_FIELD=frequency
+MINER_VOLTAGE_FIELD=coreVoltage
+MINER_FAN_SPEED_FIELD=fanspeed
+MINER_AUTO_FAN_FIELD=autofanspeed
+```
+
+The parser already accepts several common telemetry names for temperature, frequency, voltage, hashrate, fan, power, and domain data. Write control is still guarded by the same min/max rails and dry-run switch.
+
+## Updates
+
+The dashboard includes a `Check Updates` button that compares the local checkout with the configured Git upstream. It does not pull or restart automatically. To update manually:
+
+```bash
+cd ~/git/bitaxe_agent
+git pull
+sudo systemctl restart bitaxe-agent
+sudo systemctl restart bitaxe-agent-ui
+```
+
 ## AI mode
 
 Set:

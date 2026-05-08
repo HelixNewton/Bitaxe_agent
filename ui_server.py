@@ -29,6 +29,10 @@ status_file_value = os.getenv("MINER_STATUS_FILE") or os.getenv("BITAXE_STATUS_F
 STATUS_FILE = Path(status_file_value)
 if not STATUS_FILE.is_absolute():
     STATUS_FILE = BASE_DIR / STATUS_FILE
+swarm_file_value = os.getenv("MINER_SWARM_FILE") or "swarm.json"
+SWARM_FILE = Path(swarm_file_value)
+if not SWARM_FILE.is_absolute():
+    SWARM_FILE = BASE_DIR / SWARM_FILE
 ENV_FILE = BASE_DIR / ".env"
 ASSETS_DIR = resource_base_dir() / "assets"
 HOST = os.getenv("MINER_UI_HOST") or os.getenv("BITAXE_UI_HOST", "0.0.0.0")
@@ -42,8 +46,13 @@ EDITABLE_KEYS = {
     "MINER_ASIC_PATH",
     "MINER_SETTINGS_PATH",
     "MINER_RESTART_PATH",
+    "MINER_FREQUENCY_FIELD",
+    "MINER_VOLTAGE_FIELD",
+    "MINER_FAN_SPEED_FIELD",
+    "MINER_AUTO_FAN_FIELD",
     "MINER_STATUS_FILE",
     "MINER_LEARNING_FILE",
+    "MINER_SWARM_FILE",
     "MINER_UI_HOST",
     "MINER_UI_PORT",
     "BITAXE_URL",
@@ -137,6 +146,7 @@ BOOLEAN_KEYS = {
 }
 
 MODE_VALUES = {"rules", "openai"}
+PROFILE_VALUES = {"axeos", "generic-json", "futurebit", "braiins"}
 
 
 def sanitize_env_value(key: str, value: str) -> str:
@@ -153,6 +163,8 @@ def validate_config_value(key: str, value: str) -> None:
         raise ValueError(f"{key} must be a boolean")
     if key == "BITAXE_MODE" and value.strip().lower() not in MODE_VALUES:
         raise ValueError(f"{key} must be one of: {', '.join(sorted(MODE_VALUES))}")
+    if key == "MINER_API_PROFILE" and value.strip().lower() not in PROFILE_VALUES:
+        raise ValueError(f"{key} must be one of: {', '.join(sorted(PROFILE_VALUES))}")
     if key in CONFIG_RANGES:
         try:
             number = float(value)
@@ -192,6 +204,143 @@ def read_status() -> dict:
     if not STATUS_FILE.exists():
         return {"status": "waiting_for_controller"}
     return json.loads(STATUS_FILE.read_text(encoding="utf-8"))
+
+
+def read_json_file(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def display_miner_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.hostname:
+        return parsed.hostname
+    return url.replace("http://", "").replace("https://", "").split("/", 1)[0]
+
+
+def read_swarm_config() -> list[dict]:
+    if not SWARM_FILE.exists():
+        config = parse_env_file()
+        return [{
+            "id": "primary",
+            "name": config.get("MINER_NAME") or "Primary Miner",
+            "url": config.get("MINER_URL") or config.get("BITAXE_URL") or "",
+            "api_profile": config.get("MINER_API_PROFILE") or "axeos",
+            "status_file": str(STATUS_FILE),
+        }]
+    payload = read_json_file(SWARM_FILE)
+    miners = payload.get("miners", [])
+    if not isinstance(miners, list):
+        raise ValueError("swarm.json must contain a miners list")
+    return miners
+
+
+def resolve_status_file(path_value: str) -> Path:
+    path = Path(path_value)
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    return path
+
+
+def summarize_miner(miner: dict) -> dict:
+    status_path = resolve_status_file(str(miner.get("status_file") or "status.json"))
+    summary = {
+        "id": str(miner.get("id") or miner.get("name") or status_path.stem),
+        "name": str(miner.get("name") or "Miner"),
+        "url": display_miner_url(str(miner.get("url") or "")),
+        "api_profile": str(miner.get("api_profile") or "axeos"),
+        "status_file": str(status_path),
+        "online": False,
+        "stale": True,
+        "status_age_seconds": None,
+        "temperature_c": None,
+        "hashrate_gh": None,
+        "power_w": None,
+        "frequency_mhz": None,
+        "domain_spread_percentage": None,
+        "last_error": None,
+    }
+    if not status_path.exists():
+        summary["last_error"] = "status file missing"
+        return summary
+    age_seconds = max(0.0, time.time() - status_path.stat().st_mtime)
+    summary["status_age_seconds"] = round(age_seconds, 3)
+    summary["stale"] = age_seconds > 120
+    try:
+        status = read_json_file(status_path)
+    except Exception as exc:
+        summary["last_error"] = f"status read failed: {exc}"
+        return summary
+    state = status.get("state") or {}
+    config = status.get("config") or {}
+    summary.update({
+        "online": bool(state) and not summary["stale"],
+        "temperature_c": state.get("temperature_c"),
+        "hashrate_gh": state.get("hashrate_gh"),
+        "power_w": state.get("power_w"),
+        "frequency_mhz": state.get("frequency_mhz"),
+        "domain_spread_percentage": state.get("domain_spread_percentage"),
+        "mode": config.get("mode"),
+        "dry_run": config.get("dry_run"),
+        "last_error": status.get("last_error"),
+    })
+    return summary
+
+
+def swarm_status() -> dict:
+    miners = [summarize_miner(miner) for miner in read_swarm_config()]
+    online = [miner for miner in miners if miner.get("online")]
+    total_hashrate = sum(float(miner.get("hashrate_gh") or 0) for miner in miners)
+    total_power = sum(float(miner.get("power_w") or 0) for miner in miners)
+    hottest = max((float(miner.get("temperature_c") or 0) for miner in miners), default=0.0)
+    return {
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "swarm_file": str(SWARM_FILE),
+        "miners": miners,
+        "summary": {
+            "total_miners": len(miners),
+            "online_miners": len(online),
+            "total_hashrate_gh": total_hashrate,
+            "total_power_w": total_power,
+            "hottest_temperature_c": hottest,
+            "efficiency_gh_per_w": total_hashrate / total_power if total_power > 0 else None,
+        },
+    }
+
+
+def update_status() -> dict:
+    def run_git(args: list[str], timeout: int = 12) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *args], cwd=BASE_DIR, capture_output=True, text=True, check=False, timeout=timeout)
+
+    current = run_git(["rev-parse", "--short", "HEAD"])
+    branch = run_git(["branch", "--show-current"])
+    upstream = run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    result = {
+        "current": current.stdout.strip() if current.returncode == 0 else "unknown",
+        "branch": branch.stdout.strip() if branch.returncode == 0 else "unknown",
+        "upstream": upstream.stdout.strip() if upstream.returncode == 0 else "",
+        "update_available": False,
+        "behind": 0,
+        "ahead": 0,
+        "message": "No upstream configured.",
+    }
+    if upstream.returncode != 0:
+        return result
+    fetch = run_git(["fetch", "--quiet"], timeout=30)
+    if fetch.returncode != 0:
+        result["message"] = fetch.stderr.strip() or "git fetch failed"
+        return result
+    counts = run_git(["rev-list", "--left-right", "--count", "HEAD...@{u}"])
+    if counts.returncode != 0:
+        result["message"] = counts.stderr.strip() or "unable to compare with upstream"
+        return result
+    ahead, behind = [int(part) for part in counts.stdout.strip().split()]
+    result.update({
+        "ahead": ahead,
+        "behind": behind,
+        "update_available": behind > 0,
+        "message": "Update available." if behind > 0 else "Already up to date.",
+    })
+    return result
 
 
 def health_status() -> dict:
@@ -285,6 +434,7 @@ def html() -> str:
   <link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230d1218'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='34' font-family='Arial' font-weight='700' fill='%2300ff9c'%3EBA%3C/text%3E%3C/svg%3E\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard.css\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard-polish.css\">
+  <link rel=\"stylesheet\" href=\"/assets/dashboard-redesign.css\">
 </head>
 <body>
   <div class=\"app-shell\">
@@ -294,6 +444,7 @@ def html() -> str:
         <a class=\"nav-link active\" href=\"#summarySec\" data-nav=\"summarySec\"><span class=\"nav-label\">SM</span></a>
         <a class=\"nav-link\" href=\"#statsSec\" data-nav=\"statsSec\"><span class=\"nav-label\">KP</span></a>
         <a class=\"nav-link\" href=\"#trendsSec\" data-nav=\"trendsSec\"><span class=\"nav-label\">TR</span></a>
+        <a class=\"nav-link\" href=\"#swarmSec\" data-nav=\"swarmSec\"><span class=\"nav-label\">SW</span></a>
         <a class=\"nav-link\" href=\"#domainsSec\" data-nav=\"domainsSec\"><span class=\"nav-label\">DM</span></a>
         <a class=\"nav-link\" href=\"#configSec\" data-nav=\"configSec\"><span class=\"nav-label\">CF</span></a>
       </nav>
@@ -354,6 +505,32 @@ def html() -> str:
 
       <section id=\"statsSec\" class=\"section-card\">
         <div class=\"stat-grid\" id=\"overview\"></div>
+      </section>
+
+      <section id=\"swarmSec\" class=\"section-card\">
+        <div class=\"panel swarm-panel\">
+          <div class=\"panel-body\">
+            <div class=\"section-head\">
+              <div>
+                <div class=\"eyebrow\">Swarm Control</div>
+                <h2 class=\"heading-md\">Fleet Overview</h2>
+              </div>
+              <button type=\"button\" class=\"btn-secondary\" id=\"checkUpdatesBtn\">Check Updates</button>
+            </div>
+            <div class=\"swarm-summary\">
+              <div><span class=\"mini-label\">Online</span><strong id=\"swarmOnline\">-</strong></div>
+              <div><span class=\"mini-label\">Hashrate</span><strong id=\"swarmHashrate\">-</strong></div>
+              <div><span class=\"mini-label\">Power</span><strong id=\"swarmPower\">-</strong></div>
+              <div><span class=\"mini-label\">Efficiency</span><strong id=\"swarmEfficiency\">-</strong></div>
+            </div>
+            <div id=\"swarmGrid\" class=\"swarm-grid\"></div>
+            <div class=\"update-strip\" id=\"updateStrip\">
+              <span class=\"mini-label\">Updates</span>
+              <strong id=\"updateStatus\">Not checked yet</strong>
+              <span id=\"updateDetails\" class=\"muted\">Use Check Updates to compare this checkout with GitHub.</span>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section id=\"trendsSec\" class=\"section-card\">
@@ -577,7 +754,8 @@ def html() -> str:
   <script>
     const editable = [
       "MINER_NAME", "MINER_URL", "MINER_API_PROFILE", "MINER_INFO_PATH", "MINER_ASIC_PATH", "MINER_SETTINGS_PATH", "MINER_RESTART_PATH",
-      "MINER_STATUS_FILE", "MINER_LEARNING_FILE", "MINER_UI_HOST", "MINER_UI_PORT",
+      "MINER_FREQUENCY_FIELD", "MINER_VOLTAGE_FIELD", "MINER_FAN_SPEED_FIELD", "MINER_AUTO_FAN_FIELD",
+      "MINER_STATUS_FILE", "MINER_LEARNING_FILE", "MINER_SWARM_FILE", "MINER_UI_HOST", "MINER_UI_PORT",
       \"BITAXE_URL\", \"BITAXE_MODE\", \"BITAXE_DRY_RUN\", \"BITAXE_AUTO_FAN\", \"BITAXE_LOOP_SECONDS\",
       \"BITAXE_MIN_FREQUENCY\", \"BITAXE_MAX_FREQUENCY\", \"BITAXE_ABSOLUTE_MAX_FREQUENCY\", \"BITAXE_FREQ_STEP\", \"BITAXE_MIN_VOLTAGE\",
       \"BITAXE_MAX_VOLTAGE\", \"BITAXE_ABSOLUTE_MAX_VOLTAGE\", \"BITAXE_VOLTAGE_STEP\", \"BITAXE_TARGET_TEMP_C\", \"BITAXE_HOT_TEMP_C\",
@@ -592,7 +770,8 @@ def html() -> str:
       \"BITAXE_STEP_COOLDOWN_SECONDS\", \"BITAXE_USE_ASIC_OPTIONS\"
     ];
     const groups = {
-      \"Miner\": [\"MINER_NAME\", \"MINER_URL\", \"MINER_API_PROFILE\", \"MINER_INFO_PATH\", \"MINER_ASIC_PATH\", \"MINER_SETTINGS_PATH\", \"MINER_RESTART_PATH\", \"MINER_STATUS_FILE\", \"MINER_LEARNING_FILE\", \"MINER_UI_HOST\", \"MINER_UI_PORT\"],
+      \"Miner\": [\"MINER_NAME\", \"MINER_URL\", \"MINER_API_PROFILE\", \"MINER_INFO_PATH\", \"MINER_ASIC_PATH\", \"MINER_SETTINGS_PATH\", \"MINER_RESTART_PATH\", \"MINER_STATUS_FILE\", \"MINER_LEARNING_FILE\", \"MINER_SWARM_FILE\", \"MINER_UI_HOST\", \"MINER_UI_PORT\"],
+      \"Write Mapping\": [\"MINER_FREQUENCY_FIELD\", \"MINER_VOLTAGE_FIELD\", \"MINER_FAN_SPEED_FIELD\", \"MINER_AUTO_FAN_FIELD\"],
       \"Control\": [\"BITAXE_URL\", \"BITAXE_MODE\", \"BITAXE_DRY_RUN\", \"BITAXE_AUTO_FAN\", \"BITAXE_LOOP_SECONDS\"],
       \"Frequency\": [\"BITAXE_MIN_FREQUENCY\", \"BITAXE_MAX_FREQUENCY\", \"BITAXE_ABSOLUTE_MAX_FREQUENCY\", \"BITAXE_FREQ_STEP\", \"BITAXE_USE_ASIC_OPTIONS\"],
       \"Voltage\": [\"BITAXE_MIN_VOLTAGE\", \"BITAXE_MAX_VOLTAGE\", \"BITAXE_ABSOLUTE_MAX_VOLTAGE\", \"BITAXE_VOLTAGE_STEP\"],
@@ -689,6 +868,14 @@ def html() -> str:
       decisionCountSubvalue: document.getElementById(\"decisionCountSubvalue\"),
       guardrailValue: document.getElementById(\"guardrailValue\"),
       guardrailSubvalue: document.getElementById(\"guardrailSubvalue\"),
+      swarmOnline: document.getElementById(\"swarmOnline\"),
+      swarmHashrate: document.getElementById(\"swarmHashrate\"),
+      swarmPower: document.getElementById(\"swarmPower\"),
+      swarmEfficiency: document.getElementById(\"swarmEfficiency\"),
+      swarmGrid: document.getElementById(\"swarmGrid\"),
+      updateStrip: document.getElementById(\"updateStrip\"),
+      updateStatus: document.getElementById(\"updateStatus\"),
+      updateDetails: document.getElementById(\"updateDetails\"),
       configForm: document.getElementById(\"configForm\"),
       saveMessage: document.getElementById(\"saveMessage\"),
       decision: document.getElementById(\"decision\"),
@@ -929,6 +1116,48 @@ def html() -> str:
       }).join(\"\");
     }
 
+    function renderSwarm(swarm) {
+      const summary = swarm.summary || {};
+      const miners = swarm.miners || [];
+      dom.swarmOnline.textContent = `${summary.online_miners ?? 0}/${summary.total_miners ?? 0}`;
+      dom.swarmHashrate.textContent = `${(Number(summary.total_hashrate_gh) || 0).toFixed(1)} GH/s`;
+      dom.swarmPower.textContent = `${(Number(summary.total_power_w) || 0).toFixed(2)} W`;
+      dom.swarmEfficiency.textContent = summary.efficiency_gh_per_w ? `${Number(summary.efficiency_gh_per_w).toFixed(2)} GH/W` : \"-\";
+      if (!miners.length) {
+        dom.swarmGrid.innerHTML = `<div class=\"swarm-miner\"><strong>No miners configured</strong><span class=\"muted\">Create swarm.json or keep using the primary miner.</span></div>`;
+        return;
+      }
+      dom.swarmGrid.innerHTML = miners.map((miner) => {
+        const state = miner.online ? \"online\" : miner.stale ? \"stale\" : \"offline\";
+        const temp = miner.temperature_c === null || miner.temperature_c === undefined ? \"-\" : `${Number(miner.temperature_c).toFixed(1)}C`;
+        const hash = miner.hashrate_gh === null || miner.hashrate_gh === undefined ? \"-\" : `${Number(miner.hashrate_gh).toFixed(1)} GH/s`;
+        const power = miner.power_w === null || miner.power_w === undefined ? \"-\" : `${Number(miner.power_w).toFixed(2)} W`;
+        const spread = miner.domain_spread_percentage === null || miner.domain_spread_percentage === undefined ? \"-\" : `${Number(miner.domain_spread_percentage).toFixed(1)}%`;
+        return `
+          <div class=\"swarm-miner ${state}\">
+            <div class=\"swarm-miner-head\">
+              <strong>${miner.name}</strong>
+              <span class=\"chip ${miner.online ? \"ok\" : \"warn\"}\">${state}</span>
+            </div>
+            <div class=\"muted\">${miner.url || \"local status\"} / ${miner.api_profile || \"profile\"}</div>
+            <div class=\"swarm-metrics\">
+              <span><b>${hash}</b><small>Hashrate</small></span>
+              <span><b>${temp}</b><small>Temp</small></span>
+              <span><b>${power}</b><small>Power</small></span>
+              <span><b>${spread}</b><small>Spread</small></span>
+            </div>
+            <div class=\"muted\">${miner.last_error || (miner.status_age_seconds === null ? \"Waiting for status.\" : `status age ${formatSeconds(miner.status_age_seconds)}`)}</div>
+          </div>
+        `;
+      }).join(\"\");
+    }
+
+    function renderUpdateStatus(update) {
+      dom.updateStrip.className = `update-strip ${update.update_available ? \"warn\" : \"\"}`;
+      dom.updateStatus.textContent = update.message || \"Update check complete.\";
+      dom.updateDetails.textContent = `${update.branch || \"branch\"} @ ${update.current || \"unknown\"} / behind ${update.behind || 0} / ahead ${update.ahead || 0}`;
+    }
+
     function presetDistance(config, preset) {
       return Object.entries(preset).reduce((score, [key, value]) => {
         if (String(config[key] ?? \"\") === String(value)) return score;
@@ -1107,8 +1336,9 @@ def html() -> str:
     async function refresh() {
       let status;
       let config;
+      let swarm;
       try {
-        [status, config] = await Promise.all([fetchJson(\"/api/status\"), fetchJson(\"/api/config\")]);
+        [status, config, swarm] = await Promise.all([fetchJson(\"/api/status\"), fetchJson(\"/api/config\"), fetchJson(\"/api/swarm\")]);
       } catch (error) {
         reconnectAttempts += 1;
         dom.health.className = \"status-pill hot\";
@@ -1135,6 +1365,7 @@ def html() -> str:
       renderHistoryChart();
       renderOverview(state, status);
       renderDomains(state);
+      renderSwarm(swarm);
       renderPresetStatus(config);
       renderProfileAdvisor(state, status);
       renderConfig(config);
@@ -1260,6 +1491,20 @@ def html() -> str:
       }
     };
 
+    document.getElementById(\"checkUpdatesBtn\").onclick = async () => {
+      dom.updateStatus.textContent = \"Checking GitHub...\";
+      dom.updateDetails.textContent = \"Fetching upstream commit metadata.\";
+      try {
+        const update = await fetchJson(\"/api/update-check\", {}, 0);
+        renderUpdateStatus(update);
+        pushActivity(\"Updates\", update.message || \"Update check finished.\");
+      } catch (error) {
+        dom.updateStrip.className = \"update-strip warn\";
+        dom.updateStatus.textContent = \"Update check failed\";
+        dom.updateDetails.textContent = error.message;
+      }
+    };
+
     document.querySelectorAll(\"[data-preset]\").forEach((button) => {
       button.onclick = () => applyPreset(button.dataset.preset);
     });
@@ -1332,6 +1577,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/status":
             self._send_json(read_status())
+            return
+        if path == "/api/swarm":
+            self._send_json(swarm_status())
+            return
+        if path == "/api/update-check":
+            self._send_json(update_status())
             return
         if path in {"/health", "/api/health"}:
             health = health_status()
