@@ -525,21 +525,21 @@ def html() -> str:
   <link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230d1218'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='34' font-family='Arial' font-weight='700' fill='%2300ff9c'%3EBA%3C/text%3E%3C/svg%3E\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard.css\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard-polish.css\">
-  <link rel=\"stylesheet\" href=\"/assets/dashboard-redesign.css?v=20260508-clean\">
+  <link rel=\"stylesheet\" href=\"/assets/dashboard-redesign.css?v=20260509-simple\">
 </head>
 <body>
   <div class=\"app-shell\">
     <aside class=\"sidebar\">
       <div class=\"brand-mark\">BA</div>
       <nav class=\"nav\">
-        <a class=\"nav-link active\" href=\"#summarySec\" data-nav=\"summarySec\"><span class=\"nav-label\">SM</span></a>
-        <a class=\"nav-link\" href=\"#statsSec\" data-nav=\"statsSec\"><span class=\"nav-label\">KP</span></a>
-        <a class=\"nav-link\" href=\"#trendsSec\" data-nav=\"trendsSec\"><span class=\"nav-label\">TR</span></a>
-        <a class=\"nav-link\" href=\"#swarmSec\" data-nav=\"swarmSec\"><span class=\"nav-label\">SW</span></a>
-        <a class=\"nav-link\" href=\"#domainsSec\" data-nav=\"domainsSec\"><span class=\"nav-label\">DM</span></a>
-        <a class=\"nav-link\" href=\"#configSec\" data-nav=\"configSec\"><span class=\"nav-label\">CF</span></a>
+        <a class=\"nav-link active\" href=\"#summarySec\" data-nav=\"summarySec\"><span class=\"nav-label\">Overview</span></a>
+        <a class=\"nav-link\" href=\"#statsSec\" data-nav=\"statsSec\"><span class=\"nav-label\">Metrics</span></a>
+        <a class=\"nav-link\" href=\"#trendsSec\" data-nav=\"trendsSec\"><span class=\"nav-label\">Trends</span></a>
+        <a class=\"nav-link\" href=\"#swarmSec\" data-nav=\"swarmSec\"><span class=\"nav-label\">Fleet</span></a>
+        <a class=\"nav-link\" href=\"#domainsSec\" data-nav=\"domainsSec\"><span class=\"nav-label\">ASICs</span></a>
+        <a class=\"nav-link\" href=\"#configSec\" data-nav=\"configSec\"><span class=\"nav-label\">Settings</span></a>
       </nav>
-      <div class=\"sidebar-meta\">Bitaxe Command Deck</div>
+      <div class=\"sidebar-meta\">Bitaxe Agent</div>
     </aside>
 
     <main class=\"workspace\">
@@ -560,7 +560,7 @@ def html() -> str:
         <div class=\"panel-body\">
           <div class=\"hero-grid\">
             <div>
-              <div class=\"eyebrow\">Cybernetic Control Plane</div>
+              <div class=\"eyebrow\">Live Miner Control</div>
               <h1 class=\"heading-xl\">Bitaxe Agent Dashboard</h1>
               <p class=\"summary-copy\" id=\"heroText\">Synchronizing controller state, thermals, tuning limits, and live miner telemetry.</p>
               <div class=\"summary-strip\">
@@ -577,13 +577,14 @@ def html() -> str:
               <div class=\"panel-body\">
                 <div class=\"section-head\">
                   <div>
-                    <div class=\"eyebrow\">Agent Intent</div>
+                    <div class=\"eyebrow\">Recommended Action</div>
                     <h2 class=\"heading-md\" id=\"decisionReason\">Loading decision</h2>
                   </div>
                 </div>
                 <div class=\"decision-text mono\" id=\"decisionPatch\">-</div>
                 <div class=\"decision-hint\" id=\"decisionHint\">The controller will describe why it is holding, climbing, or rolling back.</div>
                 <div class=\"decision-actions\" style=\"margin-top:16px;\">
+                  <button type=\"button\" class=\"btn-secondary\" id=\"applySafeBtn\">Apply Safe Rails</button>
                   <button type=\"button\" class=\"btn-secondary\" id=\"restartControllerBtn\">Restart Controller</button>
                   <button type=\"button\" class=\"btn-danger\" id=\"restartMinerBtn\">Restart Miner</button>
                 </div>
@@ -669,7 +670,27 @@ def html() -> str:
               </div>
             </div>
           </div>
-          <div class=\"headroom-grid\">
+            <div class=\"headroom-grid\">
+            <div class=\"panel meter-card efficiency-panel\">
+              <div class=\"panel-body\">
+                <div class=\"section-head\">
+                  <div>
+                    <div class=\"eyebrow\">Efficiency</div>
+                    <h2 class=\"heading-md\" id=\"efficiencyNow\">-</h2>
+                  </div>
+                </div>
+                <div class=\"efficiency-controls\">
+                  <label><span>$/kWh</span><input id=\"energyCostInput\" type=\"number\" min=\"0\" step=\"0.01\" value=\"0.15\"></label>
+                  <label><span>Target J/TH</span><input id=\"targetEfficiencyInput\" type=\"number\" min=\"1\" step=\"0.1\" value=\"20\"></label>
+                  <label><span>Unit</span><select id=\"efficiencyUnitSelect\"><option value=\"jth\">J/TH</option><option value=\"ghw\">GH/W</option></select></label>
+                </div>
+                <div class=\"efficiency-result\">
+                  <strong id=\"dailyCostValue\">-</strong>
+                  <span>projected daily energy cost</span>
+                </div>
+                <p class=\"panel-copy\" id=\"efficiencyAdvice\">Waiting for power and hashrate.</p>
+              </div>
+            </div>
             <div class=\"panel meter-card\">
               <div class=\"panel-body\">
                 <div class=\"section-head\">
@@ -801,7 +822,7 @@ def html() -> str:
               <div id=\"details\" class=\"info-grid\"></div>
               <div class=\"toolbar\">
                 <div class=\"toolbar-group\">
-                  <span class=\"chip\" id=\"fanChip\">Fan: -</span>
+                  <span class=\"chip\" id=\"fanStripChip\">Fan: -</span>
                   <span class=\"chip\" id=\"modeStripChip\">Mode: -</span>
                 </div>
               </div>
@@ -932,6 +953,7 @@ def html() -> str:
       modeStripChip: document.getElementById(\"modeStripChip\"),
       dryRunChip: document.getElementById(\"dryRunChip\"),
       fanChip: document.getElementById(\"fanChip\"),
+      fanStripChip: document.getElementById(\"fanStripChip\"),
       stabilityChip: document.getElementById(\"stabilityChip\"),
       domainGuardChip: document.getElementById(\"domainGuardChip\"),
       decisionReason: document.getElementById(\"decisionReason\"),
@@ -949,6 +971,12 @@ def html() -> str:
       nextStepAt: document.getElementById(\"nextStepAt\"),
       nextStepHint: document.getElementById(\"nextStepHint\"),
       tuningLabel: document.getElementById(\"tuningLabel\"),
+      efficiencyNow: document.getElementById(\"efficiencyNow\"),
+      energyCostInput: document.getElementById(\"energyCostInput\"),
+      targetEfficiencyInput: document.getElementById(\"targetEfficiencyInput\"),
+      efficiencyUnitSelect: document.getElementById(\"efficiencyUnitSelect\"),
+      dailyCostValue: document.getElementById(\"dailyCostValue\"),
+      efficiencyAdvice: document.getElementById(\"efficiencyAdvice\"),
       domainAlert: document.getElementById(\"domainAlert\"),
       domainGrid: document.getElementById(\"domainGrid\"),
       profileAdvisor: document.getElementById(\"profileAdvisor\"),
@@ -1161,6 +1189,42 @@ def html() -> str:
         <text x=\"${padding}\" y=\"18\" fill=\"#93a7b3\" font-size=\"12\">Hashrate GH/s</text>
         <text x=\"${width - 120}\" y=\"18\" fill=\"#93a7b3\" font-size=\"12\">Temperature C</text>
       `;
+    }
+
+    function restoreEfficiencySettings() {
+      dom.energyCostInput.value = localStorage.getItem(\"bitaxe.energyCost\") || dom.energyCostInput.value;
+      dom.targetEfficiencyInput.value = localStorage.getItem(\"bitaxe.targetJth\") || dom.targetEfficiencyInput.value;
+      dom.efficiencyUnitSelect.value = localStorage.getItem(\"bitaxe.efficiencyUnit\") || dom.efficiencyUnitSelect.value;
+    }
+
+    function saveEfficiencySettings() {
+      localStorage.setItem(\"bitaxe.energyCost\", dom.energyCostInput.value);
+      localStorage.setItem(\"bitaxe.targetJth\", dom.targetEfficiencyInput.value);
+      localStorage.setItem(\"bitaxe.efficiencyUnit\", dom.efficiencyUnitSelect.value);
+    }
+
+    function renderEfficiencyPanel(state, status) {
+      const hashrate = Number(state.hashrate_gh) || 0;
+      const power = Number(state.power_w) || 0;
+      const ghPerW = hashrate && power ? hashrate / power : 0;
+      const jPerTh = ghPerW ? 1000 / ghPerW : 0;
+      const cost = Number(dom.energyCostInput.value) || 0;
+      const target = Number(dom.targetEfficiencyInput.value) || 20;
+      const dailyCost = (power * 24 / 1000) * cost;
+      const unit = dom.efficiencyUnitSelect.value;
+      dom.efficiencyNow.textContent = ghPerW ? (unit === \"ghw\" ? `${ghPerW.toFixed(2)} GH/W` : `${jPerTh.toFixed(1)} J/TH`) : \"-\";
+      dom.dailyCostValue.textContent = power ? `$${dailyCost.toFixed(2)} / day` : \"-\";
+      if (!ghPerW) {
+        dom.efficiencyAdvice.textContent = \"Waiting for hashrate and power telemetry.\";
+        return;
+      }
+      if (jPerTh <= target) {
+        dom.efficiencyAdvice.textContent = `Efficiency is inside target. Current ${jPerTh.toFixed(1)} J/TH is at or below ${target.toFixed(1)} J/TH.`;
+      } else if (Number(state.temperature_c) > Number(status.config?.target_temp_c || 0)) {
+        dom.efficiencyAdvice.textContent = `Efficiency is above target and thermals are warm. Prefer lower frequency or more cooling before raising voltage.`;
+      } else {
+        dom.efficiencyAdvice.textContent = `Efficiency is above target. Try a small voltage reduction first, then watch hashrate stability for a few cycles.`;
+      }
     }
 
     function setBar(node, ratio, variant) {
@@ -1516,6 +1580,7 @@ def html() -> str:
       renderSwarm(swarm);
       renderPresetStatus(config);
       renderProfileAdvisor(state, status);
+      renderEfficiencyPanel(state, status);
       renderConfig(config);
       renderInfoRows(state, status, config);
 
@@ -1527,6 +1592,7 @@ def html() -> str:
       dom.modeStripChip.textContent = `Mode: ${status.config?.mode || \"-\"}`;
       dom.dryRunChip.textContent = `Dry Run: ${prettyBool(status.config?.dry_run)}`;
       dom.fanChip.textContent = `Fan: ${prettyBool(config.BITAXE_AUTO_FAN)} / ${state.fan_percent ?? \"-\"}%`;
+      dom.fanStripChip.textContent = `Fan: ${prettyBool(config.BITAXE_AUTO_FAN)} / ${state.fan_percent ?? \"-\"}%`;
       dom.stabilityChip.textContent = `Stability: ${ratio ? ratio.toFixed(1) : \"-\"}% expected`;
       dom.domainGuardChip.className = domainGuard.className;
       dom.domainGuardChip.textContent = `Domain Guard: ${domainGuard.label}`;
@@ -1639,6 +1705,8 @@ def html() -> str:
       }
     };
 
+    document.getElementById(\"applySafeBtn\").onclick = () => applyPreset(\"cool\");
+
     document.getElementById(\"checkUpdatesBtn\").onclick = async () => {
       dom.updateStatus.textContent = \"Checking GitHub...\";
       dom.updateDetails.textContent = \"Fetching upstream commit metadata.\";
@@ -1704,6 +1772,12 @@ def html() -> str:
 
     dom.showHashrateToggle.onchange = renderHistoryChart;
     dom.showTempToggle.onchange = renderHistoryChart;
+    [dom.energyCostInput, dom.targetEfficiencyInput, dom.efficiencyUnitSelect].forEach((control) => {
+      control.onchange = () => {
+        saveEfficiencySettings();
+        refresh();
+      };
+    });
 
     document.querySelectorAll(\"[data-preset]\").forEach((button) => {
       button.onclick = () => applyPreset(button.dataset.preset);
@@ -1733,6 +1807,7 @@ def html() -> str:
 
     setupObservers();
     setupSearch();
+    restoreEfficiencySettings();
     refresh();
     scheduleRefresh();
   </script>
