@@ -299,13 +299,83 @@ button,.btn-secondary{
   height:310px;
   border:1px solid #202b38;
   border-radius:12px;
-  background:#0a0f14;
+  background:
+    radial-gradient(circle at 25% 5%,rgba(255,138,34,.12),transparent 30%),
+    linear-gradient(180deg,#0c1118,#080d12);
+  box-shadow:inset 0 0 0 1px #ffffff04;
+}
+#historyChart{
+  overflow:visible;
+}
+.chart-grid{
+  stroke:#28404d;
+  stroke-width:1;
+  opacity:.34;
+}
+.chart-heat{
+  fill:rgba(255,73,93,.12);
+}
+.chart-line{
+  fill:none;
+  stroke-width:3.5;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+  filter:url(#lineGlow);
+}
+.chart-line.hash{
+  stroke:#2f9bff;
+}
+.chart-line.temp{
+  stroke:#30e69b;
+}
+.chart-line.power{
+  stroke:#ff8a22;
+}
+.chart-area.hash{
+  fill:url(#hashFill);
+}
+.chart-area.temp{
+  fill:url(#tempFill);
+}
+.chart-area.power{
+  fill:url(#powerFill);
+}
+.chart-axis{
+  fill:#9fb3bf;
+  font-size:12px;
+  font-weight:800;
 }
 .legend{
+  display:flex;
+  flex-wrap:wrap;
+  gap:14px;
+  margin-top:12px;
   color:var(--clean-muted);
+  font-size:12px;
+  font-weight:800;
 }
-.legend .freq{
-  display:none;
+.legend span{
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+}
+.legend span:before{
+  content:"";
+  width:10px;
+  height:10px;
+  border-radius:999px;
+}
+.legend .hashrate:before{
+  background:#2f9bff;
+  box-shadow:0 0 12px #2f9bff99;
+}
+.legend .temp:before{
+  background:#30e69b;
+  box-shadow:0 0 12px #30e69b99;
+}
+.legend .power:before{
+  background:#ff8a22;
+  box-shadow:0 0 12px #ff8a2299;
 }
 .toggle{
   min-height:42px;

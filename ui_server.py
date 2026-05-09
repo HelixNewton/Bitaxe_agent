@@ -542,7 +542,7 @@ def html() -> str:
   <link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230d1218'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='34' font-family='Arial' font-weight='700' fill='%2300ff9c'%3EBA%3C/text%3E%3C/svg%3E\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard.css\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard-polish.css\">
-  <link rel=\"stylesheet\" href=\"/assets/dashboard-redesign.css?v=20260509-simple\">
+  <link rel=\"stylesheet\" href=\"/assets/dashboard-redesign.css?v=20260509-flow\">
 </head>
 <body>
   <div class=\"app-shell\">
@@ -675,6 +675,7 @@ def html() -> str:
                   </select>
                   <label class=\"toggle\"><input type=\"checkbox\" id=\"showHashrateToggle\" checked> Hashrate</label>
                   <label class=\"toggle\"><input type=\"checkbox\" id=\"showTempToggle\" checked> Temp</label>
+                  <label class=\"toggle\"><input type=\"checkbox\" id=\"showPowerToggle\" checked> Power</label>
                   <button type=\"button\" class=\"btn-secondary\" id=\"pauseRefreshBtn\">Pause Refresh</button>
                   <button type=\"button\" class=\"btn-secondary\" id=\"copyStatusBtn\">Copy Status JSON</button>
                 </div>
@@ -683,8 +684,8 @@ def html() -> str:
                 <svg id=\"historyChart\" viewBox=\"0 0 960 280\" preserveAspectRatio=\"none\"></svg>
               </div>
               <div class=\"legend\">
+                <span class=\"hashrate\">Hashrate</span>
                 <span class=\"temp\">Temperature</span>
-                <span class=\"freq\">Frequency</span>
                 <span class=\"power\">Power</span>
               </div>
             </div>
@@ -1030,6 +1031,7 @@ def html() -> str:
       discoveryNotice: document.getElementById(\"discoveryNotice\"),
       showHashrateToggle: document.getElementById(\"showHashrateToggle\"),
       showTempToggle: document.getElementById(\"showTempToggle\"),
+      showPowerToggle: document.getElementById(\"showPowerToggle\"),
       updateStrip: document.getElementById(\"updateStrip\"),
       updateStatus: document.getElementById(\"updateStatus\"),
       updateDetails: document.getElementById(\"updateDetails\"),
@@ -1155,6 +1157,7 @@ def html() -> str:
       historyBuffer.push({
         temp: Number(state.temperature_c) || 0,
         hash: Number(state.hashrate_gh) || 0,
+        power: Number(state.power_w) || 0,
         target: Number(status?.config?.target_temp_c) || 0,
         at: status?.updated_at || new Date().toISOString()
       });
@@ -1162,15 +1165,43 @@ def html() -> str:
     }
 
     function normalizeSeries(values, width, height, padding, minOverride, maxOverride) {
-      if (!values.length) return \"\";
+      if (!values.length) return [];
       const min = Number.isFinite(minOverride) ? minOverride : Math.min(...values);
       const max = Number.isFinite(maxOverride) ? maxOverride : Math.max(...values);
       const span = max - min || 1;
       return values.map((value, index) => {
         const x = padding + ((width - padding * 2) * index / Math.max(1, values.length - 1));
         const y = height - padding - (((value - min) / span) * (height - padding * 2));
-        return `${x.toFixed(2)},${y.toFixed(2)}`;
-      }).join(\" \");
+        return { x, y };
+      });
+    }
+
+    function smoothPath(points) {
+      if (!points.length) return \"\";
+      if (points.length === 1) return `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+      const commands = [`M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`];
+      for (let index = 0; index < points.length - 1; index += 1) {
+        const current = points[index];
+        const next = points[index + 1];
+        const previous = points[index - 1] || current;
+        const after = points[index + 2] || next;
+        const tension = 0.18;
+        const cp1x = current.x + (next.x - previous.x) * tension;
+        const cp1y = current.y + (next.y - previous.y) * tension;
+        const cp2x = next.x - (after.x - current.x) * tension;
+        const cp2y = next.y - (after.y - current.y) * tension;
+        commands.push(`C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${next.x.toFixed(2)} ${next.y.toFixed(2)}`);
+      }
+      return commands.join(\" \");
+    }
+
+    function areaPath(points, height, padding) {
+      if (!points.length) return \"\";
+      const line = smoothPath(points);
+      const first = points[0];
+      const last = points[points.length - 1];
+      const floor = height - padding;
+      return `${line} L ${last.x.toFixed(2)} ${floor.toFixed(2)} L ${first.x.toFixed(2)} ${floor.toFixed(2)} Z`;
     }
 
     function renderHistoryChart() {
@@ -1184,29 +1215,42 @@ def html() -> str:
       const padding = 18;
       const showHash = dom.showHashrateToggle?.checked !== false;
       const showTemp = dom.showTempToggle?.checked !== false;
+      const showPower = dom.showPowerToggle?.checked !== false;
       const temps = historyBuffer.map((point) => point.temp);
       const hashes = historyBuffer.map((point) => point.hash);
+      const powers = historyBuffer.map((point) => point.power);
       const tempMin = Math.min(...temps, ...historyBuffer.map((point) => point.target || point.temp));
       const tempMax = Math.max(...temps, ...historyBuffer.map((point) => point.target || point.temp), 1);
-      const hashPoints = showHash ? normalizeSeries(hashes, width, height, padding) : \"\";
-      const tempPoints = showTemp ? normalizeSeries(temps, width, height, padding, tempMin, tempMax) : \"\";
+      const hashPoints = showHash ? normalizeSeries(hashes, width, height, padding) : [];
+      const tempPoints = showTemp ? normalizeSeries(temps, width, height, padding, tempMin, tempMax) : [];
+      const powerPoints = showPower ? normalizeSeries(powers, width, height, padding) : [];
+      const hashPath = smoothPath(hashPoints);
+      const tempPath = smoothPath(tempPoints);
+      const powerPath = smoothPath(powerPoints);
       const segmentWidth = (width - padding * 2) / Math.max(1, historyBuffer.length - 1);
       const heatBands = historyBuffer.map((point, index) => {
         if (!point.target || point.temp <= point.target) return \"\";
         const x = Math.max(0, padding + (segmentWidth * index) - segmentWidth / 2);
-        return `<rect x=\"${x.toFixed(2)}\" y=\"0\" width=\"${Math.max(4, segmentWidth).toFixed(2)}\" height=\"${height}\" fill=\"rgba(255,77,109,.11)\"></rect>`;
+        return `<rect class=\"chart-heat\" x=\"${x.toFixed(2)}\" y=\"16\" width=\"${Math.max(6, segmentWidth).toFixed(2)}\" height=\"${height - 34}\" rx=\"9\"></rect>`;
       }).join(\"\");
       const grid = [0.2, 0.4, 0.6, 0.8].map((ratio) => {
         const y = (height * ratio).toFixed(2);
-        return `<line x1=\"0\" y1=\"${y}\" x2=\"${width}\" y2=\"${y}\" stroke=\"rgba(0,255,156,.08)\" stroke-width=\"1\" />`;
+        return `<line class=\"chart-grid\" x1=\"${padding}\" y1=\"${y}\" x2=\"${width - padding}\" y2=\"${y}\" />`;
       }).join(\"\");
       dom.historyChart.innerHTML = `
+        <defs>
+          <linearGradient id=\"hashFill\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\"><stop offset=\"0\" stop-color=\"#2f9bff\" stop-opacity=\".38\"/><stop offset=\"1\" stop-color=\"#2f9bff\" stop-opacity=\"0\"/></linearGradient>
+          <linearGradient id=\"tempFill\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\"><stop offset=\"0\" stop-color=\"#30e69b\" stop-opacity=\".34\"/><stop offset=\"1\" stop-color=\"#30e69b\" stop-opacity=\"0\"/></linearGradient>
+          <linearGradient id=\"powerFill\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\"><stop offset=\"0\" stop-color=\"#ff8a22\" stop-opacity=\".42\"/><stop offset=\"1\" stop-color=\"#ff8a22\" stop-opacity=\"0\"/></linearGradient>
+          <filter id=\"lineGlow\" x=\"-20%\" y=\"-20%\" width=\"140%\" height=\"140%\"><feGaussianBlur stdDeviation=\"3\" result=\"blur\"/><feMerge><feMergeNode in=\"blur\"/><feMergeNode in=\"SourceGraphic\"/></feMerge></filter>
+        </defs>
         ${heatBands}
         ${grid}
-        ${showHash ? `<polyline fill=\"none\" stroke=\"#39e5ff\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\" points=\"${hashPoints}\"></polyline>` : \"\"}
-        ${showTemp ? `<polyline fill=\"none\" stroke=\"#33ffaf\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\" points=\"${tempPoints}\"></polyline>` : \"\"}
-        <text x=\"${padding}\" y=\"18\" fill=\"#93a7b3\" font-size=\"12\">Hashrate GH/s</text>
-        <text x=\"${width - 120}\" y=\"18\" fill=\"#93a7b3\" font-size=\"12\">Temperature C</text>
+        ${showHash ? `<path class=\"chart-area hash\" d=\"${areaPath(hashPoints, height, padding)}\"></path><path class=\"chart-line hash\" d=\"${hashPath}\"></path>` : \"\"}
+        ${showPower ? `<path class=\"chart-area power\" d=\"${areaPath(powerPoints, height, padding)}\"></path><path class=\"chart-line power\" d=\"${powerPath}\"></path>` : \"\"}
+        ${showTemp ? `<path class=\"chart-area temp\" d=\"${areaPath(tempPoints, height, padding)}\"></path><path class=\"chart-line temp\" d=\"${tempPath}\"></path>` : \"\"}
+        <text class=\"chart-axis left\" x=\"${padding}\" y=\"20\">Hashrate GH/s</text>
+        <text class=\"chart-axis right\" x=\"${width - 128}\" y=\"20\">Temp C / Power W</text>
       `;
     }
 
@@ -1845,6 +1889,7 @@ def html() -> str:
 
     dom.showHashrateToggle.onchange = renderHistoryChart;
     dom.showTempToggle.onchange = renderHistoryChart;
+    dom.showPowerToggle.onchange = renderHistoryChart;
     [dom.energyCostInput, dom.targetEfficiencyInput, dom.efficiencyUnitSelect].forEach((control) => {
       control.onchange = () => {
         saveEfficiencySettings();
