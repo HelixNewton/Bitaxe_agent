@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import ipaddress
 import json
 import os
 import subprocess
@@ -234,6 +236,38 @@ def read_swarm_config() -> list[dict]:
     return miners
 
 
+def write_swarm_config(miners: list[dict]) -> None:
+    SWARM_FILE.write_text(json.dumps({"miners": miners}, indent=2) + "\n", encoding="utf-8")
+
+
+def add_swarm_miner(payload: dict) -> dict:
+    url = str(payload.get("url") or "").strip().rstrip("/")
+    if not url:
+        raise ValueError("url is required")
+    if not url.startswith(("http://", "https://")):
+        url = f"http://{url}"
+    name = str(payload.get("name") or display_miner_url(url) or "Miner").strip()
+    miner_id = "".join(char.lower() if char.isalnum() else "-" for char in name).strip("-") or "miner"
+    miners = read_swarm_config()
+    existing_ids = {str(miner.get("id")) for miner in miners}
+    base_id = miner_id
+    counter = 2
+    while miner_id in existing_ids:
+        miner_id = f"{base_id}-{counter}"
+        counter += 1
+    status_name = f"status-{miner_id}.json"
+    miner = {
+        "id": miner_id,
+        "name": name,
+        "url": url,
+        "api_profile": str(payload.get("api_profile") or "axeos"),
+        "status_file": str(payload.get("status_file") or status_name),
+    }
+    miners.append(miner)
+    write_swarm_config(miners)
+    return miner
+
+
 def resolve_status_file(path_value: str) -> Path:
     path = Path(path_value)
     if not path.is_absolute():
@@ -304,6 +338,63 @@ def swarm_status() -> dict:
             "hottest_temperature_c": hottest,
             "efficiency_gh_per_w": total_hashrate / total_power if total_power > 0 else None,
         },
+    }
+
+
+def discover_miners() -> dict:
+    config = parse_env_file()
+    base_url = config.get("MINER_URL") or config.get("BITAXE_URL")
+    if not base_url:
+        return {"devices": [], "message": "MINER_URL or BITAXE_URL is not configured."}
+    parsed = urlparse(base_url if "://" in base_url else f"http://{base_url}")
+    if not parsed.hostname:
+        return {"devices": [], "message": "Unable to detect subnet from configured miner URL."}
+    info_path = config.get("MINER_INFO_PATH") or "/api/system/info"
+    if not info_path.startswith("/"):
+        info_path = f"/{info_path}"
+    try:
+        network = ipaddress.ip_network(f"{parsed.hostname}/24", strict=False)
+    except ValueError as exc:
+        return {"devices": [], "message": f"Subnet scan unavailable: {exc}"}
+
+    known_hosts = {
+        display_miner_url(str(miner.get("url") or ""))
+        for miner in read_swarm_config()
+    }
+
+    def probe(host: str) -> dict | None:
+        url = f"http://{host}{info_path}"
+        req = request.Request(url, method="GET")
+        req.add_header("Connection", "close")
+        try:
+            with request.urlopen(req, timeout=0.35) as response:
+                text = response.read(65536).decode("utf-8", errors="ignore")
+                data = json.loads(text) if text else {}
+        except Exception:
+            return None
+        bitaxe_signals = ("axeOSVersion", "ASICModel", "deviceModel", "frequency", "voltage")
+        if not any(key in data for key in bitaxe_signals):
+            return None
+        return {
+            "name": str(data.get("hostname") or data.get("deviceModel") or f"Bitaxe {host}"),
+            "url": f"http://{host}",
+            "api_profile": "axeos",
+            "version": data.get("axeOSVersion") or data.get("version"),
+            "registered": host in known_hosts,
+        }
+
+    devices: list[dict] = []
+    hosts = [str(host) for host in network.hosts()]
+    with ThreadPoolExecutor(max_workers=48) as pool:
+        future_map = {pool.submit(probe, host): host for host in hosts}
+        for future in as_completed(future_map):
+            result = future.result()
+            if result:
+                devices.append(result)
+    devices.sort(key=lambda item: item["url"])
+    return {
+        "devices": devices,
+        "message": f"Found {len(devices)} Bitaxe-like device(s) on {network}.",
     }
 
 
@@ -523,6 +614,19 @@ def html() -> str:
               <div><span class=\"mini-label\">Power</span><strong id=\"swarmPower\">-</strong></div>
               <div><span class=\"mini-label\">Efficiency</span><strong id=\"swarmEfficiency\">-</strong></div>
             </div>
+            <form id=\"swarmAddForm\" class=\"swarm-add-form\">
+              <input name=\"name\" placeholder=\"Nickname\">
+              <input name=\"url\" placeholder=\"Miner IP or URL\">
+              <select name=\"api_profile\">
+                <option value=\"axeos\">AxeOS / Bitaxe</option>
+                <option value=\"generic-json\">Generic JSON</option>
+                <option value=\"futurebit\">FutureBit</option>
+                <option value=\"braiins\">Braiins</option>
+              </select>
+              <button type=\"submit\" class=\"btn-secondary\">Add Device</button>
+              <button type=\"button\" class=\"btn-secondary\" id=\"rescanNetworkBtn\">Rescan Network</button>
+            </form>
+            <div id=\"discoveryNotice\" class=\"decision-hint hidden\">No new devices found yet.</div>
             <div id=\"swarmGrid\" class=\"swarm-grid\"></div>
             <div class=\"update-strip\" id=\"updateStrip\">
               <span class=\"mini-label\">Updates</span>
@@ -549,6 +653,8 @@ def html() -> str:
                     <option value=\"10000\">10s</option>
                     <option value=\"15000\">15s</option>
                   </select>
+                  <label class=\"toggle\"><input type=\"checkbox\" id=\"showHashrateToggle\" checked> Hashrate</label>
+                  <label class=\"toggle\"><input type=\"checkbox\" id=\"showTempToggle\" checked> Temp</label>
                   <button type=\"button\" class=\"btn-secondary\" id=\"pauseRefreshBtn\">Pause Refresh</button>
                   <button type=\"button\" class=\"btn-secondary\" id=\"copyStatusBtn\">Copy Status JSON</button>
                 </div>
@@ -873,6 +979,10 @@ def html() -> str:
       swarmPower: document.getElementById(\"swarmPower\"),
       swarmEfficiency: document.getElementById(\"swarmEfficiency\"),
       swarmGrid: document.getElementById(\"swarmGrid\"),
+      swarmAddForm: document.getElementById(\"swarmAddForm\"),
+      discoveryNotice: document.getElementById(\"discoveryNotice\"),
+      showHashrateToggle: document.getElementById(\"showHashrateToggle\"),
+      showTempToggle: document.getElementById(\"showTempToggle\"),
       updateStrip: document.getElementById(\"updateStrip\"),
       updateStatus: document.getElementById(\"updateStatus\"),
       updateDetails: document.getElementById(\"updateDetails\"),
@@ -932,6 +1042,24 @@ def html() -> str:
       return Number.isFinite(number) ? `${(number * 100).toFixed(1)}%` : \"-\";
     }
 
+    function temperatureWidget(current, vrm, target, critical, updatedAt) {
+      const temp = Number(current);
+      const vrmTemp = Number(vrm);
+      const marker = Number.isFinite(temp) && critical ? Math.max(0, Math.min(100, (temp / critical) * 100)) : 0;
+      const targetStop = critical ? Math.max(0, Math.min(100, (Number(target) / critical) * 100)) : 65;
+      const tip = `ASIC ${Number.isFinite(temp) ? temp.toFixed(1) : \"-\"}C / VRM ${Number.isFinite(vrmTemp) ? vrmTemp.toFixed(1) : \"-\"}C / ${updatedAt || \"no timestamp\"}`;
+      const vrmMarkup = Number.isFinite(vrmTemp)
+        ? `<div class=\"temp-widget mini\" title=\"${tip}\"><div class=\"temp-zone\" style=\"--target:${targetStop}%\"><span class=\"temp-marker\" style=\"left:${Math.max(0, Math.min(100, (vrmTemp / critical) * 100))}%\"></span></div></div>`
+        : \"\";
+      return `
+        <div class=\"temp-widget\" title=\"${tip}\">
+          <div class=\"temp-zone\" style=\"--target:${targetStop}%\"><span class=\"temp-marker\" style=\"left:${marker}%\"></span></div>
+          <div class=\"temp-widget-label\"><span>Target ${target ?? \"-\"}C</span><span>Critical ${critical ?? \"-\"}C</span></div>
+        </div>
+        ${vrmMarkup}
+      `;
+    }
+
     function blockOdds(hashrateGh, difficulty, seconds) {
       const hashPerSecond = Number(hashrateGh) * 1e9;
       const diff = Number(difficulty);
@@ -975,20 +1103,21 @@ def html() -> str:
       `).join(\"\");
     }
 
-    function addHistoryPoint(state) {
+    function addHistoryPoint(state, status) {
       if (!state || typeof state.temperature_c !== \"number\") return;
       historyBuffer.push({
         temp: Number(state.temperature_c) || 0,
-        freq: Number(state.frequency_mhz) || 0,
-        power: Number(state.power_w) || 0
+        hash: Number(state.hashrate_gh) || 0,
+        target: Number(status?.config?.target_temp_c) || 0,
+        at: status?.updated_at || new Date().toISOString()
       });
       while (historyBuffer.length > maxHistoryPoints) historyBuffer.shift();
     }
 
-    function normalizeSeries(values, width, height, padding) {
+    function normalizeSeries(values, width, height, padding, minOverride, maxOverride) {
       if (!values.length) return \"\";
-      const min = Math.min(...values);
-      const max = Math.max(...values);
+      const min = Number.isFinite(minOverride) ? minOverride : Math.min(...values);
+      const max = Number.isFinite(maxOverride) ? maxOverride : Math.max(...values);
       const span = max - min || 1;
       return values.map((value, index) => {
         const x = padding + ((width - padding * 2) * index / Math.max(1, values.length - 1));
@@ -1006,18 +1135,31 @@ def html() -> str:
       const width = 960;
       const height = 280;
       const padding = 18;
-      const tempPoints = normalizeSeries(historyBuffer.map((point) => point.temp), width, height, padding);
-      const freqPoints = normalizeSeries(historyBuffer.map((point) => point.freq), width, height, padding);
-      const powerPoints = normalizeSeries(historyBuffer.map((point) => point.power), width, height, padding);
+      const showHash = dom.showHashrateToggle?.checked !== false;
+      const showTemp = dom.showTempToggle?.checked !== false;
+      const temps = historyBuffer.map((point) => point.temp);
+      const hashes = historyBuffer.map((point) => point.hash);
+      const tempMin = Math.min(...temps, ...historyBuffer.map((point) => point.target || point.temp));
+      const tempMax = Math.max(...temps, ...historyBuffer.map((point) => point.target || point.temp), 1);
+      const hashPoints = showHash ? normalizeSeries(hashes, width, height, padding) : \"\";
+      const tempPoints = showTemp ? normalizeSeries(temps, width, height, padding, tempMin, tempMax) : \"\";
+      const segmentWidth = (width - padding * 2) / Math.max(1, historyBuffer.length - 1);
+      const heatBands = historyBuffer.map((point, index) => {
+        if (!point.target || point.temp <= point.target) return \"\";
+        const x = Math.max(0, padding + (segmentWidth * index) - segmentWidth / 2);
+        return `<rect x=\"${x.toFixed(2)}\" y=\"0\" width=\"${Math.max(4, segmentWidth).toFixed(2)}\" height=\"${height}\" fill=\"rgba(255,77,109,.11)\"></rect>`;
+      }).join(\"\");
       const grid = [0.2, 0.4, 0.6, 0.8].map((ratio) => {
         const y = (height * ratio).toFixed(2);
         return `<line x1=\"0\" y1=\"${y}\" x2=\"${width}\" y2=\"${y}\" stroke=\"rgba(0,255,156,.08)\" stroke-width=\"1\" />`;
       }).join(\"\");
       dom.historyChart.innerHTML = `
+        ${heatBands}
         ${grid}
-        <polyline fill=\"none\" stroke=\"#33ffaf\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\" points=\"${tempPoints}\"></polyline>
-        <polyline fill=\"none\" stroke=\"#39e5ff\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\" points=\"${freqPoints}\"></polyline>
-        <polyline fill=\"none\" stroke=\"#ffd166\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\" points=\"${powerPoints}\"></polyline>
+        ${showHash ? `<polyline fill=\"none\" stroke=\"#39e5ff\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\" points=\"${hashPoints}\"></polyline>` : \"\"}
+        ${showTemp ? `<polyline fill=\"none\" stroke=\"#33ffaf\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\" points=\"${tempPoints}\"></polyline>` : \"\"}
+        <text x=\"${padding}\" y=\"18\" fill=\"#93a7b3\" font-size=\"12\">Hashrate GH/s</text>
+        <text x=\"${width - 120}\" y=\"18\" fill=\"#93a7b3\" font-size=\"12\">Temperature C</text>
       `;
     }
 
@@ -1058,8 +1200,9 @@ def html() -> str:
 
     function renderOverview(state, status) {
       const expected = Number(state.raw?.expectedHashrate) || 0;
+      const tempPanel = temperatureWidget(state.temperature_c, state.vr_temperature_c, status.config?.target_temp_c, status.config?.emergency_temp_c, status.updated_at);
       const next = [
-        { label: \"Temp\", value: state.temperature_c?.toFixed?.(1) ?? \"-\", suffix: \"C\", sub: `Target ${status.config?.target_temp_c ?? \"-\"}C` },
+        { label: \"Temp\", value: state.temperature_c?.toFixed?.(1) ?? \"-\", suffix: \"C\", sub: `Target ${status.config?.target_temp_c ?? \"-\"}C`, extra: tempPanel },
         { label: \"Hashrate\", value: state.hashrate_gh?.toFixed?.(1) ?? \"-\", suffix: \" GH/s\", sub: `Expected ${expected ? expected.toFixed(1) : \"-\"} GH/s` },
         { label: \"Power\", value: state.power_w?.toFixed?.(2) ?? \"-\", suffix: \" W\", sub: `Cap ${status.config?.max_power_w ?? \"-\"} W` },
         { label: \"Frequency\", value: state.frequency_mhz ?? \"-\", suffix: \" MHz\", sub: `Range ${status.config?.min_frequency ?? \"-\"}-${status.config?.max_frequency ?? \"-\"}` }
@@ -1072,6 +1215,7 @@ def html() -> str:
           <div class=\"panel-body\">
             <div class=\"eyebrow\">${item.label}</div>
             <div class=\"stat-value\">${item.value}${item.suffix}</div>
+            ${item.extra || \"\"}
             <div class=\"stat-foot\"><span>${item.sub}</span><span class=\"chip ok\">Live</span></div>
           </div>
         </div>
@@ -1132,6 +1276,7 @@ def html() -> str:
         const temp = miner.temperature_c === null || miner.temperature_c === undefined ? \"-\" : `${Number(miner.temperature_c).toFixed(1)}C`;
         const hash = miner.hashrate_gh === null || miner.hashrate_gh === undefined ? \"-\" : `${Number(miner.hashrate_gh).toFixed(1)} GH/s`;
         const power = miner.power_w === null || miner.power_w === undefined ? \"-\" : `${Number(miner.power_w).toFixed(2)} W`;
+        const efficiency = Number(miner.hashrate_gh) && Number(miner.power_w) ? `${(Number(miner.hashrate_gh) / Number(miner.power_w)).toFixed(2)} GH/W` : \"-\";
         const spread = miner.domain_spread_percentage === null || miner.domain_spread_percentage === undefined ? \"-\" : `${Number(miner.domain_spread_percentage).toFixed(1)}%`;
         return `
           <div class=\"swarm-miner ${state}\">
@@ -1144,9 +1289,12 @@ def html() -> str:
               <span><b>${hash}</b><small>Hashrate</small></span>
               <span><b>${temp}</b><small>Temp</small></span>
               <span><b>${power}</b><small>Power</small></span>
-              <span><b>${spread}</b><small>Spread</small></span>
+              <span><b>${efficiency}</b><small>Efficiency</small></span>
             </div>
-            <div class=\"muted\">${miner.last_error || (miner.status_age_seconds === null ? \"Waiting for status.\" : `status age ${formatSeconds(miner.status_age_seconds)}`)}</div>
+            <div class=\"swarm-miner-foot\">
+              <span class=\"muted\">${miner.last_error || (miner.status_age_seconds === null ? \"Waiting for status.\" : `status age ${formatSeconds(miner.status_age_seconds)} / spread ${spread}`)}</span>
+              <button type=\"button\" class=\"btn-secondary reconnect-miner\" data-miner-id=\"${miner.id}\">Reconnect</button>
+            </div>
           </div>
         `;
       }).join(\"\");
@@ -1361,7 +1509,7 @@ def html() -> str:
       const thermalVariant = thermalRatio >= 100 ? \"hot\" : thermalRatio >= 85 ? \"warn\" : \"\";
       const powerVariant = powerRatio >= 100 ? \"hot\" : powerRatio >= 90 ? \"warn\" : \"\";
 
-      addHistoryPoint(state);
+      addHistoryPoint(state, status);
       renderHistoryChart();
       renderOverview(state, status);
       renderDomains(state);
@@ -1505,6 +1653,58 @@ def html() -> str:
       }
     };
 
+    dom.swarmAddForm.onsubmit = async (event) => {
+      event.preventDefault();
+      const form = new FormData(dom.swarmAddForm);
+      const payload = Object.fromEntries(form.entries());
+      dom.discoveryNotice.classList.remove(\"hidden\");
+      dom.discoveryNotice.textContent = \"Adding miner to swarm.json...\";
+      try {
+        const result = await fetchJson(\"/api/swarm\", {
+          method: \"POST\",
+          headers: { \"Content-Type\": \"application/json\" },
+          body: JSON.stringify(payload)
+        }, 0);
+        dom.discoveryNotice.textContent = `Added ${result.miner?.name || \"miner\"}. Waiting for controller status file.`;
+        dom.swarmAddForm.reset();
+        pushActivity(\"Swarm\", `Added ${result.miner?.url || payload.url} to swarm configuration.`);
+        refresh();
+      } catch (error) {
+        dom.discoveryNotice.textContent = `Add failed: ${error.message}`;
+      }
+    };
+
+    document.getElementById(\"rescanNetworkBtn\").onclick = async () => {
+      dom.discoveryNotice.classList.remove(\"hidden\");
+      dom.discoveryNotice.textContent = \"Scanning local /24 subnet for Bitaxe devices...\";
+      try {
+        const result = await fetchJson(\"/api/discover\", {}, 0);
+        const devices = result.devices || [];
+        dom.discoveryNotice.innerHTML = devices.length
+          ? devices.map((device) => `<button type=\"button\" class=\"discovered-device\" data-url=\"${device.url}\" data-name=\"${device.name}\">${device.name} <span>${device.url}${device.registered ? \" / registered\" : \"\"}</span></button>`).join(\"\")
+          : (result.message || \"No new devices found.\");
+        pushActivity(\"Discovery\", result.message || \"Network scan finished.\");
+      } catch (error) {
+        dom.discoveryNotice.textContent = `Discovery failed: ${error.message}`;
+      }
+    };
+
+    dom.discoveryNotice.onclick = (event) => {
+      const button = event.target.closest(\".discovered-device\");
+      if (!button) return;
+      dom.swarmAddForm.elements.name.value = button.dataset.name || \"\";
+      dom.swarmAddForm.elements.url.value = button.dataset.url || \"\";
+    };
+
+    dom.swarmGrid.onclick = (event) => {
+      if (!event.target.closest(\".reconnect-miner\")) return;
+      pushActivity(\"Swarm\", \"Reconnect requested; refreshing fleet status now.\");
+      refresh();
+    };
+
+    dom.showHashrateToggle.onchange = renderHistoryChart;
+    dom.showTempToggle.onchange = renderHistoryChart;
+
     document.querySelectorAll(\"[data-preset]\").forEach((button) => {
       button.onclick = () => applyPreset(button.dataset.preset);
     });
@@ -1581,6 +1781,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/swarm":
             self._send_json(swarm_status())
             return
+        if path == "/api/discover":
+            self._send_json(discover_miners())
+            return
         if path == "/api/update-check":
             self._send_json(update_status())
             return
@@ -1606,6 +1809,10 @@ class Handler(BaseHTTPRequestHandler):
                         updates[key] = str(value)
                 validated = write_env_file(updates)
                 self._send_json({"ok": True, "updated": validated})
+                return
+            if path == "/api/swarm":
+                miner = add_swarm_miner(payload)
+                self._send_json({"ok": True, "miner": miner})
                 return
             if path == "/api/action":
                 action = payload.get("action")
