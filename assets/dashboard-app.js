@@ -993,7 +993,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
         }, 0);
-        dom.discoveryNotice.textContent = `Added ${result.miner?.name || "miner"}. Waiting for controller status file.`;
+        dom.discoveryNotice.textContent = `Added ${result.miner?.name || "miner"}. The dashboard will use a local status file when available, or a live probe for ESP32/NerdMiner devices.`;
         dom.swarmAddForm.reset();
         pushActivity("Swarm", `Added ${result.miner?.url || payload.url} to swarm configuration.`);
         refresh();

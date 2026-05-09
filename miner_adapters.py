@@ -116,10 +116,23 @@ class NerdMinerAdapter(BaseAdapter):
     def normalize(self, info: Dict[str, Any], asic: Dict[str, Any]) -> Dict[str, Any]:
         normalized = super().normalize(info, asic)
         raw = normalized["raw"]
-        khs = get_first_number(raw, "hashrate_kh", "hashRateKH", "KHs", "khs", default=0.0)
+        khs = get_first_number(
+            raw,
+            "currentHashRate",
+            "current_hashrate",
+            "hashrate_kh",
+            "hashRateKH",
+            "KHs",
+            "khs",
+            default=0.0,
+        )
         if khs and not normalized["hashrate_gh"]:
             normalized["hashrate_gh"] = khs / 1_000_000.0
             normalized["hashrate_10m_gh"] = normalized["hashrate_gh"]
+        normalized["temperature_c"] = get_first_number(raw, "temp", "temperature", "temperature_c", default=normalized["temperature_c"])
+        normalized["shares"] = int(get_first_number(raw, "completedShares", "shares", default=0.0))
+        normalized["valid_shares"] = int(get_first_number(raw, "valids", "validShares", default=0.0))
+        normalized["best_difficulty"] = raw.get("bestDiff") or raw.get("bestDifficulty")
         return normalized
 
 

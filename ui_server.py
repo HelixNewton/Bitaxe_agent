@@ -14,6 +14,7 @@ from urllib import error, request
 from urllib.parse import urlparse
 
 from esp32_tools import esp32_status
+from miner_adapters import get_adapter
 
 
 def app_base_dir() -> Path:
@@ -151,6 +152,11 @@ BOOLEAN_KEYS = {
 
 MODE_VALUES = {"rules", "openai"}
 PROFILE_VALUES = {"axeos", "generic-json", "futurebit", "braiins", "esp32", "nerdminer"}
+LIVE_PROBE_TTL_SECONDS = 12
+LIVE_PROBE_TIMEOUT_SECONDS = 0.8
+LIVE_PROBE_CACHE: dict[str, tuple[float, dict]] = {}
+NERDMINER_PROBE_PATHS = ("/api/status", "/status", "/api", "/")
+GENERIC_PROBE_PATHS = ("/api/system/info", "/api/status", "/status", "/api", "/")
 
 
 def sanitize_env_value(key: str, value: str) -> str:
@@ -294,13 +300,94 @@ def resolve_status_file(path_value: str) -> Path:
     return path
 
 
+def normalize_base_url(url: str) -> str:
+    cleaned = str(url or "").strip().rstrip("/")
+    if cleaned and not cleaned.startswith(("http://", "https://")):
+        cleaned = f"http://{cleaned}"
+    return cleaned
+
+
+def probe_paths_for_profile(profile: str) -> tuple[str, ...]:
+    if profile in {"nerdminer", "esp32"}:
+        return NERDMINER_PROBE_PATHS
+    return GENERIC_PROBE_PATHS
+
+
+def probe_live_miner(miner: dict) -> dict | None:
+    profile = str(miner.get("api_profile") or "generic-json").strip().lower()
+    base_url = normalize_base_url(str(miner.get("url") or ""))
+    if not base_url:
+        return None
+    cache_key = f"{profile}:{base_url}"
+    cached = LIVE_PROBE_CACHE.get(cache_key)
+    if cached and time.time() - cached[0] < LIVE_PROBE_TTL_SECONDS:
+        return dict(cached[1])
+
+    adapter = get_adapter(profile)
+    fallback: dict | None = None
+    for path in probe_paths_for_profile(profile):
+        url = f"{base_url}{path}"
+        req = request.Request(url, method="GET")
+        req.add_header("Connection", "close")
+        try:
+            with request.urlopen(req, timeout=LIVE_PROBE_TIMEOUT_SECONDS) as response:
+                body = response.read(65536)
+                content_type = response.headers.get("Content-Type", "")
+        except Exception as exc:
+            fallback = {
+                "online": False,
+                "stale": True,
+                "last_error": f"live probe failed: {exc}",
+            }
+            continue
+
+        text = body.decode("utf-8", errors="ignore").strip()
+        if text:
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                data = None
+            if isinstance(data, dict):
+                normalized = adapter.normalize(data, {})
+                result = {
+                    "online": True,
+                    "stale": False,
+                    "status_age_seconds": 0.0,
+                    "temperature_c": normalized.get("temperature_c") or None,
+                    "hashrate_gh": normalized.get("hashrate_gh") or None,
+                    "power_w": normalized.get("power_w") or None,
+                    "frequency_mhz": normalized.get("frequency_mhz") or None,
+                    "domain_spread_percentage": normalized.get("domain_spread_percentage") or None,
+                    "last_error": None,
+                    "probe_source": path,
+                }
+                LIVE_PROBE_CACHE[cache_key] = (time.time(), result)
+                return dict(result)
+
+        readable_type = content_type.split(";", 1)[0] or "HTTP"
+        fallback = {
+            "online": True,
+            "stale": False,
+            "status_age_seconds": 0.0,
+            "last_error": f"Device is reachable, but stock NerdMiner does not expose live stats over HTTP ({readable_type}).",
+            "probe_source": path,
+        }
+        break
+
+    if fallback:
+        LIVE_PROBE_CACHE[cache_key] = (time.time(), fallback)
+        return dict(fallback)
+    return None
+
+
 def summarize_miner(miner: dict) -> dict:
     status_path = resolve_status_file(str(miner.get("status_file") or "status.json"))
+    profile = str(miner.get("api_profile") or "axeos").strip().lower()
     summary = {
         "id": str(miner.get("id") or miner.get("name") or status_path.stem),
         "name": str(miner.get("name") or "Miner"),
         "url": display_miner_url(str(miner.get("url") or "")),
-        "api_profile": str(miner.get("api_profile") or "axeos"),
+        "api_profile": profile,
         "status_file": str(status_path),
         "online": False,
         "stale": True,
@@ -313,6 +400,10 @@ def summarize_miner(miner: dict) -> dict:
         "last_error": None,
     }
     if not status_path.exists():
+        live = probe_live_miner(miner)
+        if live:
+            summary.update(live)
+            return summary
         summary["last_error"] = "status file missing"
         return summary
     age_seconds = max(0.0, time.time() - status_path.stat().st_mtime)
@@ -336,6 +427,10 @@ def summarize_miner(miner: dict) -> dict:
         "dry_run": config.get("dry_run"),
         "last_error": status.get("last_error"),
     })
+    if summary["stale"] and profile in {"nerdminer", "esp32", "generic-json"}:
+        live = probe_live_miner(miner)
+        if live:
+            summary.update(live)
     return summary
 
 

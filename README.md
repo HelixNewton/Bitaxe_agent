@@ -115,6 +115,7 @@ Supported miner profiles are:
 
 - `axeos`: AxeOS / ESP-Miner compatible Bitaxe devices
 - `generic-json`: read-compatible HTTP JSON miners where paths are configured manually
+- `nerdminer` and `esp32`: ESP32/NerdMiner monitoring profiles. Stock NerdMiner_v2 currently uses WiFiManager for setup and does not publish a full live telemetry API, so the dashboard can show that the device is reachable and will normalize JSON stats if custom firmware exposes `/api/status`, `/status`, `/api`, or `/`.
 - `futurebit` and `braiins`: placeholders for configured-path monitoring; write actions still require compatible fields
 
 For non-AxeOS miners, start with `BITAXE_DRY_RUN=true`, set `MINER_INFO_PATH`, `MINER_ASIC_PATH`, and `MINER_SETTINGS_PATH`, then verify the dashboard fields before allowing live control.
