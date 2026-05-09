@@ -598,7 +598,7 @@ def html() -> str:
                     <h2 class=\"heading-md\" id=\"decisionReason\">Loading decision</h2>
                   </div>
                 </div>
-                <div class=\"decision-text mono\" id=\"decisionPatch\">-</div>
+                <div class=\"decision-text\" id=\"decisionPatch\">Waiting for the controller to choose the safest next step.</div>
                 <div class=\"decision-hint\" id=\"decisionHint\">The controller will describe why it is holding, climbing, or rolling back.</div>
                 <div class=\"decision-actions\" style=\"margin-top:16px;\">
                   <button type=\"button\" class=\"btn-secondary\" id=\"applySafeBtn\">Apply Safe Rails</button>
@@ -1271,6 +1271,39 @@ def html() -> str:
       return `Holding because power draw ${power.toFixed(2)}W is above the climb gate of ${powerGate.toFixed(2)}W.`;
     }
 
+    function friendlyDecisionTitle(reason) {
+      const text = String(reason || \"\").toLowerCase();
+      if (!text || text === \"hold\") return \"Monitoring normally\";
+      if (text.includes(\"cooldown\")) return \"Cooling down before the next change\";
+      if (text.includes(\"emergency\") || text.includes(\"over\") || text.includes(\"hot\")) return \"Protecting the miner from heat\";
+      if (text.includes(\"raise frequency\")) return \"Performance can increase soon\";
+      if (text.includes(\"lower frequency\") || text.includes(\"rollback\")) return \"Reducing speed for stability\";
+      if (text.includes(\"voltage\")) return \"Adjusting power for stability\";
+      if (text.includes(\"learning\")) return \"Using learned safe settings\";
+      return reason;
+    }
+
+    function friendlyPatch(patch) {
+      const entries = Object.entries(patch || {}).filter(([, value]) => value !== null && value !== undefined);
+      if (!entries.length) {
+        return `<div class=\"decision-summary\"><strong>No manual change needed</strong><span>The agent is watching temperature, power, and stability.</span></div>`;
+      }
+      const labels = {
+        frequency: \"Frequency\",
+        coreVoltage: \"Core voltage\",
+        fanspeed: \"Fan speed\",
+        autofanspeed: \"Auto fan\"
+      };
+      return `
+        <div class=\"decision-summary\">
+          <strong>Planned adjustment</strong>
+          <div class=\"decision-pills\">
+            ${entries.map(([key, value]) => `<span>${labels[key] || key}: ${value === true ? \"On\" : value === false ? \"Off\" : value}</span>`).join(\"\")}
+          </div>
+        </div>
+      `;
+    }
+
     function getDomainGuardState(state, status) {
       const spread = Number(state.domain_spread_percentage) || 0;
       const offline = Number(state.offline_domain_count) || 0;
@@ -1620,8 +1653,8 @@ def html() -> str:
       dom.domainGuardChip.className = domainGuard.className;
       dom.domainGuardChip.textContent = `Domain Guard: ${domainGuard.label}`;
       dom.heroText.textContent = `Miner ${config.BITAXE_URL || \"-\"} is running at ${state.frequency_mhz ?? \"-\"} MHz, ${state.voltage_mv ?? \"-\"} mV, ${state.temperature_c?.toFixed?.(1) ?? \"-\"}C, and ${state.hashrate_gh?.toFixed?.(1) ?? \"-\"} GH/s on the 1-minute window.`;
-      dom.decisionReason.textContent = decision.reason || \"No decision available\";
-      dom.decisionPatch.textContent = JSON.stringify(decision.patch || {}, null, 2);
+      dom.decisionReason.textContent = friendlyDecisionTitle(decision.reason);
+      dom.decisionPatch.innerHTML = friendlyPatch(decision.patch);
       dom.decisionHint.textContent = explainTuning(state, status);
       dom.decision.textContent = JSON.stringify(decision, null, 2);
       dom.raw.textContent = JSON.stringify(status, null, 2);
