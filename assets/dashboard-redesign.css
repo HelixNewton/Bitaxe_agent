@@ -296,6 +296,7 @@ button,.btn-secondary{
   gap:14px;
 }
 .chart-shell{
+  position:relative;
   height:310px;
   border:1px solid #202b38;
   border-radius:12px;
@@ -376,6 +377,43 @@ button,.btn-secondary{
 .legend .power:before{
   background:#ff8a22;
   box-shadow:0 0 12px #ff8a2299;
+}
+.chart-latest{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  margin-top:10px;
+}
+.chart-latest span{
+  border:1px solid var(--clean-border-soft);
+  border-radius:999px;
+  padding:7px 10px;
+  background:#0d141c;
+  color:var(--clean-soft);
+  font-size:12px;
+  font-weight:800;
+}
+.chart-tooltip{
+  position:absolute;
+  z-index:5;
+  min-width:156px;
+  border:1px solid #32475a;
+  border-radius:10px;
+  padding:10px;
+  background:#101820f2;
+  box-shadow:0 14px 28px #0008;
+  pointer-events:none;
+}
+.chart-tooltip strong,
+.chart-tooltip span{
+  display:block;
+}
+.chart-tooltip strong{
+  margin-bottom:6px;
+}
+.chart-tooltip span{
+  color:var(--clean-soft);
+  font-size:12px;
 }
 .toggle{
   min-height:42px;

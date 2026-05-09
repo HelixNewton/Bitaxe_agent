@@ -9,6 +9,8 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
 from urllib import error, parse, request
 
+from miner_adapters import get_adapter
+
 
 def app_base_dir() -> str:
     if getattr(sys, "frozen", False):
@@ -684,6 +686,7 @@ class Controller:
     def __init__(self, config: Config):
         self.config = config
         self.client = MinerClient(config.bitaxe_url, config.info_path, config.asic_path, config.settings_path)
+        self.adapter = get_adapter(config.miner_api_profile)
         self.ai = AiAdvisor(config) if config.mode == "openai" else None
         self.learning = LearningStore(config.learning_file)
         self.last_change_at = 0.0
@@ -728,46 +731,23 @@ class Controller:
         )
 
     def parse_state(self, info: Dict[str, Any], asic: Dict[str, Any]) -> MinerState:
-        merged = dict(info)
-        merged.update(asic)
-        temp = get_first_number(merged, "temp", "temperature", "ASIC_temp", "asic_temp", default=0.0)
-        vr_temp = get_first_number(merged, "vrTemp", "vr_temp", "voltage_regulator_temp", default=0.0)
-        freq = int(get_first_number(merged, "frequency", "freq", default=0.0))
-        volt = int(get_first_number(merged, "coreVoltage", "core_voltage", "asic_voltage", default=0.0))
-        frequency_options = parse_int_list(merged.get("frequencyOptions"))
-        voltage_options = parse_int_list(merged.get("voltageOptions"))
-        fan = int(get_first_number(merged, "fanSpeed", "fan_speed", "fanspeed", default=0.0))
-        hashrate = get_first_number(
-            merged,
-            "hashRate_1m",
-            "hashRate",
-            "hashrate",
-            "hashRate1m",
-            "hashrate1m",
-            "hashRateGH",
-            default=0.0,
-        )
-        hashrate_10m = get_first_number(merged, "hashRate_10m", "hashrate_10m", "hashRate10m", "hashrate10m", default=hashrate)
-        error_percentage = get_first_number(merged, "errorPercentage", "error_percentage", default=0.0)
-        domain_spread_percentage, offline_domain_count = parse_domain_metrics(merged)
-        power = get_first_number(merged, "power", "power_w", "powerDraw", default=0.0)
-        input_mv = int(get_first_number(merged, "voltage", "inputVoltage", "input_voltage", default=0.0))
+        normalized = self.adapter.normalize(info, asic)
         return MinerState(
-            temperature_c=temp,
-            vr_temperature_c=vr_temp,
-            frequency_mhz=freq,
-            voltage_mv=volt,
-            frequency_options=frequency_options,
-            voltage_options=voltage_options,
-            fan_percent=fan,
-            hashrate_gh=hashrate,
-            hashrate_10m_gh=hashrate_10m,
-            error_percentage=error_percentage,
-            domain_spread_percentage=domain_spread_percentage,
-            offline_domain_count=offline_domain_count,
-            power_w=power,
-            input_voltage_mv=input_mv,
-            raw=merged,
+            temperature_c=normalized["temperature_c"],
+            vr_temperature_c=normalized["vr_temperature_c"],
+            frequency_mhz=normalized["frequency_mhz"],
+            voltage_mv=normalized["voltage_mv"],
+            frequency_options=normalized["frequency_options"],
+            voltage_options=normalized["voltage_options"],
+            fan_percent=normalized["fan_percent"],
+            hashrate_gh=normalized["hashrate_gh"],
+            hashrate_10m_gh=normalized["hashrate_10m_gh"],
+            error_percentage=normalized["error_percentage"],
+            domain_spread_percentage=normalized["domain_spread_percentage"],
+            offline_domain_count=normalized["offline_domain_count"],
+            power_w=normalized["power_w"],
+            input_voltage_mv=normalized["input_voltage_mv"],
+            raw=normalized["raw"],
         )
 
     def build_patch(self, *, frequency: Optional[int] = None, voltage: Optional[int] = None, fan_percent: Optional[int] = None) -> Dict[str, Any]:

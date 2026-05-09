@@ -1,5 +1,6 @@
 {
   "scripts": {
+    "test": "python -m unittest discover -s tests",
     "build:css": "npx @tailwindcss/cli -i ./assets/tailwind.css -o ./assets/dashboard.css --minify",
     "watch:css": "npx @tailwindcss/cli -i ./assets/tailwind.css -o ./assets/dashboard.css --watch"
   },
