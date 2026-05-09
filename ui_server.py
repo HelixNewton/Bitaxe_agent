@@ -148,7 +148,7 @@ BOOLEAN_KEYS = {
 }
 
 MODE_VALUES = {"rules", "openai"}
-PROFILE_VALUES = {"axeos", "generic-json", "futurebit", "braiins"}
+PROFILE_VALUES = {"axeos", "generic-json", "futurebit", "braiins", "esp32", "nerdminer"}
 
 
 def sanitize_env_value(key: str, value: str) -> str:
@@ -256,16 +256,33 @@ def add_swarm_miner(payload: dict) -> dict:
         miner_id = f"{base_id}-{counter}"
         counter += 1
     status_name = f"status-{miner_id}.json"
+    api_profile = str(payload.get("api_profile") or "axeos").strip().lower()
+    if api_profile not in PROFILE_VALUES:
+        raise ValueError(f"api_profile must be one of: {', '.join(sorted(PROFILE_VALUES))}")
     miner = {
         "id": miner_id,
         "name": name,
         "url": url,
-        "api_profile": str(payload.get("api_profile") or "axeos"),
+        "api_profile": api_profile,
         "status_file": str(payload.get("status_file") or status_name),
     }
     miners.append(miner)
     write_swarm_config(miners)
     return miner
+
+
+def remove_swarm_miner(payload: dict) -> dict:
+    miner_id = str(payload.get("id") or "").strip()
+    if not miner_id:
+        raise ValueError("id is required")
+    if miner_id == "primary":
+        raise ValueError("primary miner cannot be removed from the fleet")
+    miners = read_swarm_config()
+    kept = [miner for miner in miners if str(miner.get("id")) != miner_id]
+    if len(kept) == len(miners):
+        raise ValueError(f"miner {miner_id} was not found")
+    write_swarm_config(kept)
+    return {"ok": True, "removed": miner_id}
 
 
 def resolve_status_file(path_value: str) -> Path:
@@ -620,6 +637,8 @@ def html() -> str:
               <input name=\"url\" placeholder=\"Miner IP or URL\">
               <select name=\"api_profile\">
                 <option value=\"axeos\">AxeOS / Bitaxe</option>
+                <option value=\"nerdminer\">NerdMiner / ESP32</option>
+                <option value=\"esp32\">Generic ESP32 Miner</option>
                 <option value=\"generic-json\">Generic JSON</option>
                 <option value=\"futurebit\">FutureBit</option>
                 <option value=\"braiins\">Braiins</option>
@@ -1337,6 +1356,7 @@ def html() -> str:
       }
       dom.swarmGrid.innerHTML = miners.map((miner) => {
         const state = miner.online ? \"online\" : miner.stale ? \"stale\" : \"offline\";
+        const removable = miner.id !== \"primary\";
         const temp = miner.temperature_c === null || miner.temperature_c === undefined ? \"-\" : `${Number(miner.temperature_c).toFixed(1)}C`;
         const hash = miner.hashrate_gh === null || miner.hashrate_gh === undefined ? \"-\" : `${Number(miner.hashrate_gh).toFixed(1)} GH/s`;
         const power = miner.power_w === null || miner.power_w === undefined ? \"-\" : `${Number(miner.power_w).toFixed(2)} W`;
@@ -1357,7 +1377,10 @@ def html() -> str:
             </div>
             <div class=\"swarm-miner-foot\">
               <span class=\"muted\">${miner.last_error || (miner.status_age_seconds === null ? \"Waiting for status.\" : `status age ${formatSeconds(miner.status_age_seconds)} / spread ${spread}`)}</span>
-              <button type=\"button\" class=\"btn-secondary reconnect-miner\" data-miner-id=\"${miner.id}\">Reconnect</button>
+              <div class=\"swarm-actions\">
+                <button type=\"button\" class=\"btn-secondary reconnect-miner\" data-miner-id=\"${miner.id}\">Reconnect</button>
+                ${removable ? `<button type=\"button\" class=\"btn-secondary remove-miner\" data-miner-id=\"${miner.id}\" data-miner-name=\"${miner.name}\">Remove</button>` : \"\"}
+              </div>
             </div>
           </div>
         `;
@@ -1765,9 +1788,26 @@ def html() -> str:
     };
 
     dom.swarmGrid.onclick = (event) => {
-      if (!event.target.closest(\".reconnect-miner\")) return;
-      pushActivity(\"Swarm\", \"Reconnect requested; refreshing fleet status now.\");
-      refresh();
+      const removeButton = event.target.closest(\".remove-miner\");
+      if (removeButton) {
+        const name = removeButton.dataset.minerName || removeButton.dataset.minerId;
+        if (!confirm(`Remove ${name} from the fleet?`)) return;
+        fetchJson(\"/api/swarm/remove\", {
+          method: \"POST\",
+          headers: { \"Content-Type\": \"application/json\" },
+          body: JSON.stringify({ id: removeButton.dataset.minerId })
+        }, 0).then(() => {
+          pushActivity(\"Swarm\", `${name} removed from swarm configuration.`);
+          refresh();
+        }).catch((error) => {
+          setActionMessage(`Remove failed: ${error.message}`, true);
+        });
+        return;
+      }
+      if (event.target.closest(\".reconnect-miner\")) {
+        pushActivity(\"Swarm\", \"Reconnect requested; refreshing fleet status now.\");
+        refresh();
+      }
     };
 
     dom.showHashrateToggle.onchange = renderHistoryChart;
@@ -1888,6 +1928,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/swarm":
                 miner = add_swarm_miner(payload)
                 self._send_json({"ok": True, "miner": miner})
+                return
+            if path == "/api/swarm/remove":
+                self._send_json(remove_swarm_miner(payload))
                 return
             if path == "/api/action":
                 action = payload.get("action")

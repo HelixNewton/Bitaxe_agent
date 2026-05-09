@@ -508,6 +508,17 @@ button,.btn-secondary{
 .swarm-miner-foot .muted{
   min-width:0;
 }
+.swarm-actions{
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  gap:8px;
+}
+.remove-miner{
+  color:#ffc8ce;
+  border-color:#6b2d37;
+  background:#271218;
+}
 .update-strip{
   display:flex;
   flex-wrap:wrap;
@@ -630,5 +641,8 @@ input:focus,select:focus{
   .swarm-miner-foot,.efficiency-result{
     align-items:flex-start;
     flex-direction:column;
+  }
+  .swarm-actions{
+    justify-content:flex-start;
   }
 }
