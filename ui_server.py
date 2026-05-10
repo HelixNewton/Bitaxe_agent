@@ -163,6 +163,7 @@ PROFILE_VALUES = {"axeos", "generic-json", "futurebit", "braiins", "esp32", "ner
 LIVE_PROBE_TTL_SECONDS = 12
 LIVE_PROBE_TIMEOUT_SECONDS = 0.8
 LIVE_PROBE_CACHE: dict[str, tuple[float, dict]] = {}
+_LIVE_PROBE_CACHE_MAX = 256
 NERDMINER_PROBE_PATHS = ("/api/status", "/status", "/api", "/")
 GENERIC_PROBE_PATHS = ("/api/system/info", "/api/status", "/status", "/api", "/")
 LOG_SERVICES = {
@@ -522,6 +523,20 @@ def probe_paths_for_profile(profile: str) -> tuple[str, ...]:
     return GENERIC_PROBE_PATHS
 
 
+def _evict_live_probe_cache() -> None:
+    """Remove expired entries; if still over limit, evict oldest by timestamp."""
+    if len(LIVE_PROBE_CACHE) <= _LIVE_PROBE_CACHE_MAX:
+        return
+    now = time.time()
+    expired = [k for k, (ts, _) in LIVE_PROBE_CACHE.items() if now - ts > LIVE_PROBE_TTL_SECONDS]
+    for k in expired:
+        del LIVE_PROBE_CACHE[k]
+    if len(LIVE_PROBE_CACHE) > _LIVE_PROBE_CACHE_MAX:
+        oldest = sorted(LIVE_PROBE_CACHE, key=lambda k: LIVE_PROBE_CACHE[k][0])
+        for k in oldest[: len(LIVE_PROBE_CACHE) - _LIVE_PROBE_CACHE_MAX]:
+            del LIVE_PROBE_CACHE[k]
+
+
 def probe_live_miner(miner: dict) -> dict | None:
     profile = str(miner.get("api_profile") or "generic-json").strip().lower()
     base_url = normalize_base_url(str(miner.get("url") or ""))
@@ -570,6 +585,7 @@ def probe_live_miner(miner: dict) -> dict | None:
                     "last_error": None,
                     "probe_source": path,
                 }
+                _evict_live_probe_cache()
                 LIVE_PROBE_CACHE[cache_key] = (time.time(), result)
                 return dict(result)
 
@@ -584,6 +600,7 @@ def probe_live_miner(miner: dict) -> dict | None:
         break
 
     if fallback:
+        _evict_live_probe_cache()
         LIVE_PROBE_CACHE[cache_key] = (time.time(), fallback)
         return dict(fallback)
     return None
@@ -777,7 +794,13 @@ def health_status() -> dict:
 def read_asset(path: str) -> tuple[bytes, str]:
     relative = path.removeprefix("/assets/")
     candidate = (ASSETS_DIR / relative).resolve()
-    if not str(candidate).startswith(str(ASSETS_DIR.resolve())) or not candidate.is_file():
+    # Use relative_to() instead of startswith() so symlinks that escape the
+    # assets directory are rejected correctly on all platforms.
+    try:
+        candidate.relative_to(ASSETS_DIR.resolve())
+    except ValueError:
+        raise FileNotFoundError(path)
+    if not candidate.is_file():
         raise FileNotFoundError(path)
     suffix = candidate.suffix.lower()
     content_type = "text/plain; charset=utf-8"
@@ -849,6 +872,7 @@ def html() -> str:
   <link rel=\"stylesheet\" href=\"/assets/dashboard.css\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard-polish.css\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard-redesign.css?v=20260510-firmware-defaults\">
+  <link rel=\"stylesheet\" href=\"/assets/dashboard-ui-improvements.css?v=20260510\">
 </head>
 <body>
   <div class=\"app-shell\">
@@ -1286,6 +1310,80 @@ def html() -> str:
   </div>
 
   <script src=\"/assets/dashboard-app.js?v=20260510-firmware-defaults\"></script>
+  <script>
+  /* UI improvement patches — runs after dashboard-app.js initialises */
+  (function () {
+    /* --- Topbar scroll class ------------------------------------------ */
+    const topbar = document.querySelector('.topbar');
+    if (topbar) {
+      const onScroll = () => topbar.classList.toggle('scrolled', window.scrollY > 12);
+      window.addEventListener('scroll', onScroll, { passive: true });
+      onScroll();
+    }
+
+    /* --- Swarm miner status dot injection -------------------------------- */
+    function patchSwarmDots() {
+      document.querySelectorAll('.swarm-miner-head').forEach(head => {
+        if (head.querySelector('.swarm-miner-dot')) return;
+        const dot = document.createElement('span');
+        dot.className = 'swarm-miner-dot';
+        head.appendChild(dot);
+      });
+    }
+
+    /* --- Stat card severity class from data-state attribute -------------- */
+    function applySeverityClasses() {
+      document.querySelectorAll('.stat-card[data-state]').forEach(card => {
+        card.classList.remove('warn', 'hot');
+        const s = card.dataset.state;
+        if (s === 'warn') card.classList.add('warn');
+        if (s === 'hot')  card.classList.add('hot');
+      });
+    }
+
+    /* --- Decision text data-action from current reason ------------------- */
+    function applyDecisionAction() {
+      const reasonEl = document.getElementById('decisionReason');
+      const textEl   = document.getElementById('decisionPatch');
+      if (!reasonEl || !textEl) return;
+      const r = (reasonEl.textContent || '').toLowerCase();
+      let action = 'hold';
+      if (r.includes('raise freq'))    action = 'raise_freq';
+      else if (r.includes('raise volt'))  action = 'raise_voltage';
+      else if (r.includes('lower freq'))  action = 'lower_freq';
+      else if (r.includes('lower volt'))  action = 'lower_voltage';
+      else if (r.includes('emergency') || r.includes('thermal rollback')) action = 'emergency';
+      textEl.dataset.action = action;
+    }
+
+    /* --- Section search dim-out ------------------------------------------ */
+    const searchInput = document.getElementById('sectionSearch');
+    const sections    = Array.from(document.querySelectorAll('.section-card'));
+    if (searchInput && sections.length) {
+      searchInput.addEventListener('input', () => {
+        const q = searchInput.value.trim().toLowerCase();
+        sections.forEach(sec => {
+          if (!q) { sec.removeAttribute('data-match'); return; }
+          const text = sec.textContent.toLowerCase();
+          sec.dataset.match = text.includes(q) ? 'true' : 'false';
+        });
+      });
+    }
+
+    /* --- MutationObserver: re-apply patches after dynamic DOM updates ----- */
+    const observer = new MutationObserver(() => {
+      patchSwarmDots();
+      applySeverityClasses();
+      applyDecisionAction();
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+
+    /* initial pass */
+    patchSwarmDots();
+    applySeverityClasses();
+    applyDecisionAction();
+  })();
+  </script>
 </body>
 </html>"""
 

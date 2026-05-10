@@ -91,15 +91,23 @@ def load_env_file() -> None:
 def run_controller() -> None:
     from controller import Config, Controller
 
-    controller = Controller(Config.from_env())
-    controller.run()
+    try:
+        controller = Controller(Config.from_env())
+        controller.run()
+    except Exception as exc:
+        startup_log(f"controller thread crashed: {type(exc).__name__}: {exc}")
+        raise
 
 
 def run_ui() -> None:
     from ui_server import create_server
 
-    server = create_server()
-    server.serve_forever()
+    try:
+        server = create_server()
+        server.serve_forever()
+    except Exception as exc:
+        startup_log(f"ui thread crashed: {type(exc).__name__}: {exc}")
+        raise
 
 
 class WindowsTrayApp:

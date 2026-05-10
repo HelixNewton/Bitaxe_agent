@@ -1,0 +1,551 @@
+/* =========================================================
+   Bitaxe Agent — UI Improvements  (loaded last, highest specificity)
+   ========================================================= */
+
+/* ---------------------------------------------------------
+   1. CSS custom properties — improvement palette
+   --------------------------------------------------------- */
+:root {
+  --ui-radius: 12px;
+  --ui-transition: 160ms cubic-bezier(.4, 0, .2, 1);
+  --ui-online:  #47d18c;
+  --ui-warn:    #e8bd55;
+  --ui-hot:     #ff6b78;
+  --ui-blue:    #6db7ff;
+  --ui-surface: #0d141c;
+
+  /* Accent gradients used on card left borders */
+  --accent-ok:   linear-gradient(180deg, #47d18c, #30b87a);
+  --accent-warn: linear-gradient(180deg, #e8bd55, #c9a340);
+  --accent-hot:  linear-gradient(180deg, #ff6b78, #e0525f);
+}
+
+
+/* ---------------------------------------------------------
+   2. Custom scrollbars (Webkit + Firefox)
+   --------------------------------------------------------- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3b4d #0b0f14;
+}
+::-webkit-scrollbar        { width: 6px; height: 6px; }
+::-webkit-scrollbar-track  { background: #0b0f14; border-radius: 999px; }
+::-webkit-scrollbar-thumb  { background: #2a3b4d; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #3a5368; }
+
+
+/* ---------------------------------------------------------
+   3. Tabular numbers everywhere — stops metric jitter
+   --------------------------------------------------------- */
+.stat-value,
+.swarm-metrics b,
+.efficiency-result strong,
+.mini-card .stat-value,
+.domain-value,
+.chart-latest span,
+.info-row strong {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+
+/* ---------------------------------------------------------
+   4. Section entry animation
+   --------------------------------------------------------- */
+@keyframes sectionIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.section-card {
+  animation: sectionIn 340ms cubic-bezier(.22, 1, .36, 1) both;
+}
+#statsSec    { animation-delay:  40ms; }
+#trendsSec   { animation-delay:  80ms; }
+#swarmSec    { animation-delay: 120ms; }
+#esp32Sec    { animation-delay: 160ms; }
+#domainsSec  { animation-delay: 200ms; }
+#configSec   { animation-delay: 240ms; }
+
+
+/* ---------------------------------------------------------
+   5. Status pill — crisp live pulse
+   --------------------------------------------------------- */
+@keyframes livePulse {
+  0%   { box-shadow: 0 0 0 0   currentColor; opacity: 1; }
+  70%  { box-shadow: 0 0 0 6px transparent;  opacity: .6; }
+  100% { box-shadow: 0 0 0 0   transparent;  opacity: 1; }
+}
+.status-pill .pulse {
+  animation: livePulse 2.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+
+/* ---------------------------------------------------------
+   6. Sidebar — active item left accent + refined hover
+   --------------------------------------------------------- */
+.sidebar {
+  gap: 0;
+}
+.nav-link {
+  position: relative;
+  overflow: hidden;
+  transition: color var(--ui-transition),
+              background var(--ui-transition),
+              border-color var(--ui-transition);
+}
+.nav-link::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 20%; bottom: 20%;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--ui-online);
+  opacity: 0;
+  transition: opacity var(--ui-transition), top var(--ui-transition), bottom var(--ui-transition);
+}
+.nav-link.active::before {
+  opacity: 1;
+  top: 18%; bottom: 18%;
+}
+.nav-link.active {
+  color: var(--ui-online);
+  background: #16212c;
+}
+.nav-link:hover:not(.active) {
+  background: #12191f;
+}
+
+
+/* ---------------------------------------------------------
+   7. Stat cards — severity-coded left accent strip
+   --------------------------------------------------------- */
+.stat-card {
+  position: relative;
+  overflow: hidden;
+}
+.stat-card::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 18%; bottom: 18%;
+  width: 3px;
+  border-radius: 0 999px 999px 0;
+  background: var(--accent-ok);
+  opacity: .7;
+  transition: background var(--ui-transition), opacity var(--ui-transition);
+}
+.stat-card.warn::before { background: var(--accent-warn); opacity: .9; }
+.stat-card.hot::before  { background: var(--accent-hot);  opacity: 1; }
+
+/* Matching title color tints */
+.stat-card.warn .stat-value { color: #f8df9a; }
+.stat-card.hot  .stat-value { color: #ffc8ce; }
+
+
+/* ---------------------------------------------------------
+   8. Metric value flash on update
+   --------------------------------------------------------- */
+@keyframes valueFlash {
+  0%   { color: var(--ui-online); }
+  100% { color: inherit; }
+}
+.stat-value.updated {
+  animation: valueFlash 600ms ease-out forwards;
+  transform: none; /* remove the old scale glitch */
+}
+
+
+/* ---------------------------------------------------------
+   9. Panel hover — subtle lift only, no glow bloat
+   --------------------------------------------------------- */
+.panel,
+.stat-card,
+.mini-card,
+.domain-card,
+.preset,
+.swarm-miner,
+.activity-item {
+  transition:
+    transform var(--ui-transition),
+    border-color var(--ui-transition),
+    box-shadow var(--ui-transition);
+}
+.panel:hover,
+.stat-card:hover,
+.mini-card:hover,
+.domain-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px #00000040;
+}
+/* Don't lift the outer summary card */
+#summarySec.panel:hover { transform: none; }
+
+
+/* ---------------------------------------------------------
+   10. Swarm miner cards — online dot with pulse
+   --------------------------------------------------------- */
+.swarm-miner {
+  position: relative;
+}
+.swarm-miner-dot {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #3a4f62;
+  margin-left: 4px;
+  transition: background var(--ui-transition);
+}
+.swarm-miner.online .swarm-miner-dot {
+  background: var(--ui-online);
+  animation: livePulse 2.4s ease-in-out infinite;
+}
+.swarm-miner.stale  .swarm-miner-dot { background: var(--ui-warn); }
+.swarm-miner.offline .swarm-miner-dot { background: var(--ui-hot); }
+
+/* Stronger online border glow */
+.swarm-miner.online {
+  border-color: #245f45;
+  box-shadow: inset 0 0 0 1px #1a4533, 0 0 0 1px #1a4533;
+}
+
+
+/* ---------------------------------------------------------
+   11. Inputs & selects — improved focus + hover states
+   --------------------------------------------------------- */
+input,
+select {
+  transition:
+    border-color var(--ui-transition),
+    background var(--ui-transition),
+    box-shadow var(--ui-transition);
+}
+input:hover:not(:focus),
+select:hover:not(:focus) {
+  border-color: #384e63;
+}
+input:focus,
+select:focus {
+  border-color: #4d6f88;
+  background: #0d1520;
+  box-shadow: 0 0 0 3px #6db7ff1a, 0 0 0 1px #4d6f88;
+  outline: none;
+}
+input::placeholder {
+  color: #3d5368;
+}
+
+
+/* ---------------------------------------------------------
+   12. Buttons — pressed state + loading state
+   --------------------------------------------------------- */
+button:not(:disabled):active {
+  transform: scale(.97);
+  opacity: .9;
+}
+button[data-loading]::after {
+  content: "";
+  display: inline-block;
+  width: 12px; height: 12px;
+  margin-left: 8px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 600ms linear infinite;
+  vertical-align: middle;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+
+/* ---------------------------------------------------------
+   13. Headroom progress bars — pill-capped ends, smooth fill
+   --------------------------------------------------------- */
+.bar {
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.bar > span {
+  border-radius: 999px;
+  transition: width 320ms cubic-bezier(.4, 0, .2, 1);
+}
+/* Warn / hot states already set in redesign.css; keep gradient for ok */
+.bar:not(.warn):not(.hot) > span {
+  background: linear-gradient(90deg, #2a9e6e, var(--ui-online));
+}
+.bar.warn > span { background: linear-gradient(90deg, #b09040, var(--ui-warn)); }
+.bar.hot  > span { background: linear-gradient(90deg, #b04858, var(--ui-hot)); }
+
+
+/* ---------------------------------------------------------
+   14. Log viewer — monospace improvements, line numbers feel
+   --------------------------------------------------------- */
+.log-viewer {
+  font-size: 12px;
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #a8c4cc;
+  background: #070c11;
+  border-color: #1a2834;
+  padding: 14px 16px;
+  border-radius: var(--ui-radius);
+}
+.log-viewer:empty::before {
+  content: "No log lines yet.";
+  color: #3d5368;
+}
+
+
+/* ---------------------------------------------------------
+   15. pre / JSON blocks — improved readability
+   --------------------------------------------------------- */
+pre {
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 2;
+  color: #bdd4dc;
+}
+
+
+/* ---------------------------------------------------------
+   16. Activity log — better entry styling
+   --------------------------------------------------------- */
+.activity-item {
+  border-left: 3px solid #263342;
+  border-radius: 0 var(--ui-radius) var(--ui-radius) 0;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.activity-item:first-child {
+  border-left-color: var(--ui-online);
+}
+.activity-item strong {
+  color: #ddeae8;
+  font-size: 13px;
+}
+.activity-item .muted {
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+
+/* ---------------------------------------------------------
+   17. Decision panel — accent border when reason is active
+   --------------------------------------------------------- */
+#decisionReason:not(:empty) {
+  color: #e2eeeb;
+}
+.decision-text {
+  border-left: 3px solid #2a3b4d;
+  transition: border-color var(--ui-transition), background var(--ui-transition);
+}
+.decision-text[data-action="raise_freq"],
+.decision-text[data-action="raise_voltage"] {
+  border-left-color: var(--ui-online);
+  background: #0e1e17;
+}
+.decision-text[data-action="lower_freq"],
+.decision-text[data-action="lower_voltage"] {
+  border-left-color: var(--ui-warn);
+  background: #191408;
+}
+.decision-text[data-action="emergency"] {
+  border-left-color: var(--ui-hot);
+  background: #1a0d10;
+}
+
+
+/* ---------------------------------------------------------
+   18. Domain cards — compact hash bar inside
+   --------------------------------------------------------- */
+.domain-card {
+  border-radius: var(--ui-radius);
+  transition: border-color var(--ui-transition), background var(--ui-transition), transform var(--ui-transition);
+}
+.domain-card:hover { transform: translateY(-2px); }
+.domain-value {
+  font-size: 26px;
+  letter-spacing: -.02em;
+  line-height: 1;
+}
+
+
+/* ---------------------------------------------------------
+   19. Config form — group header separator
+   --------------------------------------------------------- */
+.config-group h3 {
+  position: relative;
+  padding-bottom: 8px;
+}
+.config-group h3::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, #2a3b4d, transparent);
+}
+
+
+/* ---------------------------------------------------------
+   20. Topbar search — icon refinement
+   --------------------------------------------------------- */
+.search-wrap::before {
+  border-color: #384e63;
+  box-shadow: none;
+  width: 13px; height: 13px;
+}
+.search-wrap::after {
+  background: #384e63;
+}
+.search-wrap input:focus {
+  border-color: #4d6f88;
+  box-shadow: 0 0 0 3px #6db7ff14;
+}
+
+
+/* ---------------------------------------------------------
+   21. Efficiency panel — cleaner result block
+   --------------------------------------------------------- */
+.efficiency-result {
+  border-color: #263342;
+  background: #090e14;
+}
+.efficiency-result strong {
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-online);
+}
+
+
+/* ---------------------------------------------------------
+   22. Preset cards — active checkmark badge
+   --------------------------------------------------------- */
+.preset {
+  transition: border-color var(--ui-transition), background var(--ui-transition), transform var(--ui-transition);
+}
+.preset.active::before {
+  content: "✓ Active";
+  position: absolute;
+  top: 10px; right: 10px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ui-online);
+  background: #10251c;
+  border: 1px solid #245f45;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.preset:hover { transform: translateY(-2px); }
+
+
+/* ---------------------------------------------------------
+   23. Mini-cards — subtle top gradient accent
+   --------------------------------------------------------- */
+.mini-card {
+  background:
+    linear-gradient(180deg, #14202d 0%, #0d141c 40%),
+    #0d141c;
+}
+
+
+/* ---------------------------------------------------------
+   24. Swarm summary tiles — mini sparkline placeholder
+   --------------------------------------------------------- */
+.swarm-summary > div {
+  position: relative;
+  overflow: hidden;
+  transition: border-color var(--ui-transition);
+}
+.swarm-summary > div:hover {
+  border-color: #334e65;
+}
+.swarm-summary strong {
+  color: #e4f0ec;
+}
+
+
+/* ---------------------------------------------------------
+   25. Topbar — subtle bottom border when scrolled
+   --------------------------------------------------------- */
+.topbar {
+  border-bottom: 1px solid transparent;
+  transition: border-color var(--ui-transition), box-shadow var(--ui-transition);
+}
+.topbar.scrolled {
+  border-bottom-color: #1a2a38;
+  box-shadow: 0 4px 16px #0000004d;
+}
+
+
+/* ---------------------------------------------------------
+   26. Section search highlight
+   --------------------------------------------------------- */
+.section-card[data-match="false"] {
+  opacity: .35;
+  pointer-events: none;
+  filter: blur(.5px);
+  transition: opacity 200ms, filter 200ms;
+}
+.section-card[data-match="true"] {
+  opacity: 1;
+  pointer-events: auto;
+  filter: none;
+}
+
+
+/* ---------------------------------------------------------
+   27. Focus ring — accessible, consistent
+   --------------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid #4d6f88;
+  outline-offset: 2px;
+}
+button:focus-visible {
+  outline: 2px solid var(--ui-online);
+  outline-offset: 2px;
+}
+
+
+/* ---------------------------------------------------------
+   28. Responsive refinements
+   --------------------------------------------------------- */
+@media (max-width: 900px) {
+  .sidebar {
+    padding: 12px 14px;
+  }
+  .nav-link::before {
+    /* Horizontal bottom indicator on mobile tab bar */
+    left: 20%; right: 20%;
+    top: auto; bottom: 0;
+    width: auto; height: 2px;
+    border-radius: 999px;
+  }
+  .nav-link.active::before {
+    top: auto; bottom: 0;
+    opacity: 1;
+  }
+  .preset.active::before {
+    font-size: 9px;
+    padding: 1px 6px;
+  }
+}
+
+@media (max-width: 640px) {
+  .stat-value {
+    font-size: clamp(28px, 6vw, 38px);
+  }
+  .heading-xl {
+    font-size: clamp(24px, 7vw, 36px);
+  }
+  .topbar {
+    padding-bottom: 8px;
+  }
+  .activity-log {
+    max-height: 260px;
+  }
+}

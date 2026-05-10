@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields as dataclass_fields
 from typing import Any, Dict, Optional
 from urllib import error, parse, request
 
@@ -305,57 +305,25 @@ class LearningRecord:
     last_seen_at: str = ""
     last_unstable_at: str = ""
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.frequency_mhz, int) or not isinstance(self.voltage_mv, int):
+            raise ValueError(
+                f"frequency_mhz and voltage_mv must be integers, got "
+                f"{self.frequency_mhz!r} and {self.voltage_mv!r}"
+            )
+        if self.frequency_mhz <= 0 or self.voltage_mv <= 0:
+            raise ValueError(
+                f"frequency_mhz and voltage_mv must be positive, got "
+                f"{self.frequency_mhz!r} and {self.voltage_mv!r}"
+            )
+
     @property
     def key(self) -> str:
         return f"{self.frequency_mhz}:{self.voltage_mv}"
 
 
-def get_first_number(data: Dict[str, Any], *keys: str, default: float = 0.0) -> float:
-    for key in keys:
-        if key in data and data[key] not in (None, ""):
-            try:
-                return float(data[key])
-            except (TypeError, ValueError):
-                continue
-    return default
-
-
 def clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
-
-
-def parse_int_list(value: Any) -> list[int]:
-    if not isinstance(value, list):
-        return []
-    out = []
-    for item in value:
-        try:
-            out.append(int(item))
-        except (TypeError, ValueError):
-            continue
-    return sorted(set(out))
-
-
-def parse_domain_metrics(data: Dict[str, Any]) -> tuple[float, int]:
-    domains = data.get("hashrateMonitor", {}).get("asics", [{}])[0].get("domains", [])
-    if not isinstance(domains, list):
-        return 0.0, 0
-    numeric_domains: list[float] = []
-    for item in domains:
-        try:
-            numeric_domains.append(float(item))
-        except (TypeError, ValueError):
-            numeric_domains.append(0.0)
-    if not numeric_domains:
-        return 0.0, 0
-    active_domains = [value for value in numeric_domains if value > 0]
-    offline_count = len(numeric_domains) - len(active_domains)
-    if not active_domains:
-        return 100.0, offline_count
-    average = sum(active_domains) / len(active_domains)
-    weakest = min(active_domains)
-    spread = ((average - weakest) / average) * 100 if average > 0 else 0.0
-    return spread, offline_count
 
 
 def prev_setting(current: int, minimum: int, step: int, options: list[int], use_options: bool) -> int:
@@ -389,7 +357,8 @@ def performance_metrics(state: MinerState, config: Config) -> Dict[str, float]:
         else 1.0
     )
     base_score = stable_hashrate + (efficiency * config.learning_efficiency_weight)
-    power_penalty = max(0.0, power_ratio - 0.92) * stable_hashrate * 2.0
+    # Clamp so a single over-power reading cannot suppress tuning indefinitely
+    power_penalty = min(max(0.0, power_ratio - 0.92) * stable_hashrate * 2.0, stable_hashrate * 3.0)
     temp_penalty = max(0.0, temp_ratio - 0.90) * 120.0
     fan_penalty = max(0.0, fan_ratio - 0.85) * 80.0
     error_penalty = max(0.0, error_ratio - 0.20) * 80.0
@@ -425,11 +394,21 @@ class LearningStore:
         try:
             with open(self.path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
-            for item in data.get("records", []):
-                record = LearningRecord(**item)
-                self.records[record.key] = record
+        except json.JSONDecodeError as exc:
+            logging.warning("learning file %s contains invalid JSON and will be reset: %s", self.path, exc)
+            return
         except Exception as exc:
             logging.warning("failed to load learning file %s: %s", self.path, exc)
+            return
+        # Filter to known fields so old JSON with extra or renamed keys does not crash
+        valid_fields = {f.name for f in dataclass_fields(LearningRecord)}
+        for item in data.get("records", []):
+            try:
+                filtered = {k: v for k, v in item.items() if k in valid_fields}
+                record = LearningRecord(**filtered)
+                self.records[record.key] = record
+            except Exception as exc:
+                logging.warning("skipping malformed learning record %s: %s", item, exc)
 
     def save(self) -> None:
         payload = {
@@ -547,7 +526,12 @@ class MinerClient:
         req = request.Request(f"{self.base_url}{path}", data=body, headers=headers, method=method)
         with request.urlopen(req, timeout=self.timeout) as response:
             text = response.read().decode("utf-8")
-            return json.loads(text) if text else {}
+            if not text:
+                return {}
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"miner returned non-JSON response ({len(text)} bytes): {exc}") from exc
 
     def get_info(self) -> Dict[str, Any]:
         return self._request("GET", self.info_path)
@@ -814,14 +798,16 @@ class Controller:
         return self.config.min_fan_percent
 
     def update_domain_spread_tracking(self, state: MinerState) -> None:
+        # Increment on breach, decay by 1 on clean poll so a single transient reading
+        # cannot reset days of accumulated stability immediately.
         if state.offline_domain_count > 0 or state.domain_spread_percentage >= self.config.critical_domain_spread_percentage:
             self.domain_spread_critical_count += 1
         else:
-            self.domain_spread_critical_count = 0
+            self.domain_spread_critical_count = max(0, self.domain_spread_critical_count - 1)
         if state.offline_domain_count > 0 or state.domain_spread_percentage >= self.config.max_domain_spread_percentage:
             self.domain_spread_breach_count += 1
         else:
-            self.domain_spread_breach_count = 0
+            self.domain_spread_breach_count = max(0, self.domain_spread_breach_count - 1)
 
     def learned_restore_decision(self, state: MinerState, fan: Optional[int]) -> Optional[Dict[str, Any]]:
         if not self.config.learning_enabled or not self.can_change(state) or not self.is_state_stable(state):

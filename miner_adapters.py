@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Protocol
 
 
@@ -52,7 +53,9 @@ def parse_domain_metrics(data: Dict[str, Any]) -> tuple[float, int]:
     average = sum(values) / len(values)
     if average <= 0:
         return 0.0, offline
-    return ((max(values) - min(values)) / average) * 100.0, offline
+    # Use weakest-domain deviation: how far below average is the worst domain.
+    # This matches the threshold logic in the controller (rollback at spread >= max_domain_spread_percentage).
+    return ((average - min(values)) / average) * 100.0, offline
 
 
 class MinerAdapter(Protocol):
@@ -151,4 +154,9 @@ ADAPTERS = {
 
 
 def get_adapter(profile: str | None) -> MinerAdapter:
-    return ADAPTERS.get((profile or "axeos").strip().lower(), ADAPTERS["generic-json"])
+    key = (profile or "axeos").strip().lower()
+    adapter = ADAPTERS.get(key)
+    if adapter is None:
+        logging.warning("Unknown miner API profile %r; falling back to generic-json", profile)
+        return ADAPTERS["generic-json"]
+    return adapter
