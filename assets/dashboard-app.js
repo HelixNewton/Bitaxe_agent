@@ -2,7 +2,7 @@
       "MINER_NAME", "MINER_URL", "MINER_API_PROFILE", "MINER_INFO_PATH", "MINER_ASIC_PATH", "MINER_SETTINGS_PATH", "MINER_RESTART_PATH",
       "MINER_FREQUENCY_FIELD", "MINER_VOLTAGE_FIELD", "MINER_FAN_SPEED_FIELD", "MINER_AUTO_FAN_FIELD",
       "MINER_STATUS_FILE", "MINER_LEARNING_FILE", "MINER_SWARM_FILE", "MINER_UI_HOST", "MINER_UI_PORT",
-      "NERDMINER_SERIAL_PORT", "NERDMINER_CONFIG_FILE",
+      "NERDMINER_SERIAL_PORT", "NERDMINER_CONFIG_FILE", "NERDMINER_URL",
       "BITAXE_URL", "BITAXE_MODE", "BITAXE_DRY_RUN", "BITAXE_AUTO_FAN", "BITAXE_LOOP_SECONDS",
       "BITAXE_MIN_FREQUENCY", "BITAXE_MAX_FREQUENCY", "BITAXE_ABSOLUTE_MAX_FREQUENCY", "BITAXE_FREQ_STEP", "BITAXE_MIN_VOLTAGE",
       "BITAXE_MAX_VOLTAGE", "BITAXE_ABSOLUTE_MAX_VOLTAGE", "BITAXE_VOLTAGE_STEP", "BITAXE_TARGET_TEMP_C", "BITAXE_HOT_TEMP_C",
@@ -17,7 +17,7 @@
       "BITAXE_STEP_COOLDOWN_SECONDS", "BITAXE_USE_ASIC_OPTIONS"
     ];
     const groups = {
-      "Miner": ["MINER_NAME", "MINER_URL", "MINER_API_PROFILE", "MINER_INFO_PATH", "MINER_ASIC_PATH", "MINER_SETTINGS_PATH", "MINER_RESTART_PATH", "MINER_STATUS_FILE", "MINER_LEARNING_FILE", "MINER_SWARM_FILE", "MINER_UI_HOST", "MINER_UI_PORT", "NERDMINER_SERIAL_PORT", "NERDMINER_CONFIG_FILE"],
+      "Miner": ["MINER_NAME", "MINER_URL", "MINER_API_PROFILE", "MINER_INFO_PATH", "MINER_ASIC_PATH", "MINER_SETTINGS_PATH", "MINER_RESTART_PATH", "MINER_STATUS_FILE", "MINER_LEARNING_FILE", "MINER_SWARM_FILE", "MINER_UI_HOST", "MINER_UI_PORT", "NERDMINER_SERIAL_PORT", "NERDMINER_CONFIG_FILE", "NERDMINER_URL"],
       "Write Mapping": ["MINER_FREQUENCY_FIELD", "MINER_VOLTAGE_FIELD", "MINER_FAN_SPEED_FIELD", "MINER_AUTO_FAN_FIELD"],
       "Control": ["BITAXE_URL", "BITAXE_MODE", "BITAXE_DRY_RUN", "BITAXE_AUTO_FAN", "BITAXE_LOOP_SECONDS"],
       "Frequency": ["BITAXE_MIN_FREQUENCY", "BITAXE_MAX_FREQUENCY", "BITAXE_ABSOLUTE_MAX_FREQUENCY", "BITAXE_FREQ_STEP", "BITAXE_USE_ASIC_OPTIONS"],
@@ -149,6 +149,8 @@
       esp32EnvsHint: document.getElementById("esp32EnvsHint"),
       esp32BundlesValue: document.getElementById("esp32BundlesValue"),
       esp32BundlesHint: document.getElementById("esp32BundlesHint"),
+      esp32ApiPatchValue: document.getElementById("esp32ApiPatchValue"),
+      esp32ApiPatchHint: document.getElementById("esp32ApiPatchHint"),
       nerdminerConfigForm: document.getElementById("nerdminerConfigForm"),
       nerdminerConfigMessage: document.getElementById("nerdminerConfigMessage"),
       nerdminerConfigPreview: document.getElementById("nerdminerConfigPreview"),
@@ -619,6 +621,7 @@
       const ports = status.ports || [];
       const envs = status.envs || [];
       const bundles = status.firmware_bundles || [];
+      const apiPatch = status.config_api_patch || {};
       dom.esp32PortsValue.textContent = String(ports.length);
       dom.esp32PortsHint.textContent = ports.length ? ports.map((port) => port.device || port.name).slice(0, 3).join(", ") : "No serial ports detected.";
       dom.serialLogPortSelect.innerHTML = ports.length
@@ -628,6 +631,11 @@
       dom.esp32EnvsHint.textContent = envs.length ? envs.slice(0, 4).join(", ") : "No PlatformIO environments found yet.";
       dom.esp32BundlesValue.textContent = String(bundles.length);
       dom.esp32BundlesHint.textContent = bundles.length ? bundles.slice(0, 3).map((bundle) => bundle.name).join(", ") : "No prebuilt firmware bundles found.";
+      const hasFirmwareDefaults = Boolean(apiPatch.checks?.local_defaults);
+      dom.esp32ApiPatchValue.textContent = apiPatch.installed ? (hasFirmwareDefaults ? "Ready" : "Installed") : "Missing";
+      dom.esp32ApiPatchHint.textContent = hasFirmwareDefaults
+        ? "API patch and private firmware defaults are present. Rebuild and flash once."
+        : (apiPatch.message || "Install patch, rebuild, and flash once.");
     }
 
     async function refreshEsp32Status() {
@@ -643,7 +651,7 @@
     function renderNerdminerConfig(payload) {
       lastNerdminerConfig = payload || {};
       const values = lastNerdminerConfig.values || {};
-      ["SSID", "PoolUrl", "PoolPort", "BtcWallet", "Timezone"].forEach((key) => {
+      ["DeviceUrl", "SSID", "PoolUrl", "PoolPort", "BtcWallet", "Timezone"].forEach((key) => {
         if (dom.nerdminerConfigForm.elements[key]) dom.nerdminerConfigForm.elements[key].value = values[key] ?? "";
       });
       dom.nerdminerConfigForm.elements.WifiPW.value = "";
@@ -670,6 +678,7 @@
     function collectNerdminerConfig() {
       const form = dom.nerdminerConfigForm;
       return {
+        DeviceUrl: form.elements.DeviceUrl.value,
         SSID: form.elements.SSID.value,
         WifiPW: form.elements.WifiPW.value,
         PoolUrl: form.elements.PoolUrl.value,
@@ -1058,6 +1067,21 @@
 
     document.getElementById("esp32RefreshBtn").onclick = refreshEsp32Status;
     document.getElementById("nerdminerRefreshConfigBtn").onclick = refreshNerdminerConfig;
+    document.getElementById("installNerdminerApiPatchBtn").onclick = async () => {
+      dom.nerdminerConfigMessage.textContent = "Installing config API patch into the NerdMiner_v2 workspace...";
+      try {
+        const result = await fetchJson("/api/esp32/api-patch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        }, 0);
+        dom.nerdminerConfigMessage.textContent = result.message || "Firmware API patch installed. Rebuild and flash NerdMiner_v2 next.";
+        pushActivity("NerdMiner", "Config API patch installed into the local NerdMiner_v2 workspace.");
+        refreshEsp32Status();
+      } catch (error) {
+        dom.nerdminerConfigMessage.textContent = `Patch failed: ${error.message}`;
+      }
+    };
     document.getElementById("refreshLogsBtn").onclick = refreshLogs;
     dom.logServiceSelect.onchange = refreshLogs;
     dom.serialLogPortSelect.onchange = () => {
@@ -1074,10 +1098,46 @@
           body: JSON.stringify(collectNerdminerConfig())
         }, 0);
         renderNerdminerConfig(result);
-        dom.nerdminerConfigMessage.textContent = `${result.apply_hint || "Saved locally."} Restart or reprovision the ESP32 for these settings to take effect.`;
+        dom.nerdminerConfigMessage.textContent = result.apply_hint || "Saved locally.";
         pushActivity("NerdMiner", "Pool, Wi-Fi, and wallet settings were saved locally.");
       } catch (error) {
         dom.nerdminerConfigMessage.textContent = `Save failed: ${error.message}`;
+      }
+    };
+
+    document.getElementById("buildNerdminerFirmwareDefaultsBtn").onclick = async () => {
+      const values = collectNerdminerConfig();
+      if (!values.SSID) {
+        dom.nerdminerConfigMessage.textContent = "Enter the Wi-Fi name before building it into firmware.";
+        return;
+      }
+      dom.nerdminerConfigMessage.textContent = "Writing private defaults and config API patch into the NerdMiner_v2 firmware workspace...";
+      try {
+        const result = await fetchJson("/api/nerdminer/firmware-defaults", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(values)
+        }, 0);
+        dom.nerdminerConfigMessage.textContent = result.message || "Firmware defaults written. Rebuild and flash NerdMiner_v2 once.";
+        pushActivity("NerdMiner", "Firmware defaults were written into the local NerdMiner_v2 workspace.");
+        refreshEsp32Status();
+      } catch (error) {
+        dom.nerdminerConfigMessage.textContent = `Firmware config build failed: ${error.message}`;
+      }
+    };
+
+    document.getElementById("applyNerdminerLiveConfigBtn").onclick = async () => {
+      dom.nerdminerConfigMessage.textContent = "Sending settings to patched NerdMiner firmware...";
+      try {
+        const result = await fetchJson("/api/nerdminer/apply", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(collectNerdminerConfig())
+        }, 0);
+        dom.nerdminerConfigMessage.textContent = result.message || "Config sent to patched NerdMiner firmware.";
+        pushActivity("NerdMiner", `Config sent to ${result.url || "NerdMiner"}.`);
+      } catch (error) {
+        dom.nerdminerConfigMessage.textContent = `Live apply failed: ${error.message}`;
       }
     };
 
@@ -1093,6 +1153,7 @@
       }
       values.PoolPort = Number(values.PoolPort) || 21496;
       values.Timezone = Number(values.Timezone) || 2;
+      delete values.DeviceUrl;
       try {
         await navigator.clipboard.writeText(JSON.stringify(values, null, 2));
         dom.nerdminerConfigMessage.textContent = "SD-card config JSON copied. Save it as /config.json on the card for stock NerdMiner_v2.";

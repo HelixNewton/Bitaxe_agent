@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib import error, request
 from urllib.parse import parse_qs, urlparse
 
-from esp32_tools import esp32_status, read_serial_log
+from esp32_tools import apply_nerdminer_config_api_patch, esp32_status, read_serial_log, write_nerdminer_firmware_defaults
 from miner_adapters import get_adapter
 
 
@@ -67,6 +67,7 @@ EDITABLE_KEYS = {
     "MINER_UI_PORT",
     "NERDMINER_SERIAL_PORT",
     "NERDMINER_CONFIG_FILE",
+    "NERDMINER_URL",
     "BITAXE_URL",
     "BITAXE_RESTART_PATH",
     "BITAXE_MODE",
@@ -169,6 +170,7 @@ LOG_SERVICES = {
     "ui": "bitaxe-agent-ui",
 }
 DEFAULT_NERDMINER_CONFIG = {
+    "DeviceUrl": "",
     "SSID": "",
     "WifiPW": "",
     "PoolUrl": "public-pool.io",
@@ -254,14 +256,14 @@ def read_nerdminer_config(redacted: bool = True) -> dict:
         "exists": NERDMINER_CONFIG_FILE.exists(),
         "has_wifi_password": has_wifi_password,
         "has_pool_password": has_pool_password,
-        "apply_hint": "Saved locally. To apply to stock NerdMiner_v2, copy this JSON to an SD card as /config.json or use the device WiFiManager setup portal.",
+        "apply_hint": "Saved locally. Stock NerdMiner_v2 still needs SD or WiFiManager; for no-SD boards, build these values into the patched firmware and flash once.",
     }
 
 
 def validate_nerdminer_config(payload: dict) -> dict:
     existing = read_nerdminer_config(redacted=False)["values"]
     values = dict(existing)
-    string_keys = ("SSID", "WifiPW", "PoolUrl", "PoolPassword", "BtcWallet")
+    string_keys = ("DeviceUrl", "SSID", "WifiPW", "PoolUrl", "PoolPassword", "BtcWallet")
     for key in string_keys:
         if key not in payload:
             continue
@@ -297,6 +299,72 @@ def write_nerdminer_config(payload: dict) -> dict:
     values = validate_nerdminer_config(payload)
     NERDMINER_CONFIG_FILE.write_text(json.dumps(values, indent=2) + "\n", encoding="utf-8")
     return read_nerdminer_config(redacted=True)
+
+
+def default_nerdminer_url(values: dict | None = None) -> str:
+    values = values or read_nerdminer_config(redacted=False)["values"]
+    if values.get("DeviceUrl"):
+        return str(values["DeviceUrl"])
+    env_url = os.getenv("NERDMINER_URL", "").strip()
+    if env_url:
+        return env_url
+    config = parse_env_file()
+    if (config.get("MINER_API_PROFILE") or "").strip().lower() in {"nerdminer", "esp32"}:
+        return config.get("MINER_URL") or ""
+    for miner in read_swarm_config():
+        if str(miner.get("api_profile") or "").strip().lower() in {"nerdminer", "esp32"}:
+            return str(miner.get("url") or "")
+    return ""
+
+
+def nerdminer_device_payload(values: dict) -> dict:
+    return {
+        "SSID": values.get("SSID") or "",
+        "WifiPW": values.get("WifiPW") or "",
+        "PoolUrl": values.get("PoolUrl") or "public-pool.io",
+        "PoolPort": int(values.get("PoolPort") or 21496),
+        "PoolPassword": values.get("PoolPassword") or "x",
+        "BtcWallet": values.get("BtcWallet") or "",
+        "Timezone": int(values.get("Timezone") or 2),
+        "SaveStats": bool(values.get("SaveStats")),
+        "Restart": True,
+    }
+
+
+def apply_nerdminer_config_to_device(payload: dict) -> dict:
+    values = validate_nerdminer_config(payload)
+    url = normalize_base_url(str(payload.get("DeviceUrl") or default_nerdminer_url(values)))
+    if not url:
+        raise ValueError("NerdMiner device URL is required")
+    body = json.dumps(nerdminer_device_payload(values)).encode("utf-8")
+    req = request.Request(f"{url}/api/config", data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Connection", "close")
+    try:
+        with request.urlopen(req, timeout=8) as response:
+            text = response.read().decode("utf-8", errors="ignore")
+    except error.HTTPError as exc:
+        text = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"NerdMiner API returned HTTP {exc.code}: {text or exc.reason}") from exc
+    except (TimeoutError, error.URLError) as exc:
+        raise RuntimeError(f"NerdMiner API request failed: {exc}") from exc
+    device_response = json.loads(text) if text else {"ok": True}
+    return {
+        "ok": bool(device_response.get("ok", True)),
+        "url": url,
+        "device_response": device_response,
+        "message": "Config sent to NerdMiner. The ESP32 should restart if the firmware API accepted it.",
+    }
+
+
+def build_nerdminer_firmware_defaults(payload: dict) -> dict:
+    values = validate_nerdminer_config(payload)
+    write_nerdminer_config(payload)
+    patch = apply_nerdminer_config_api_patch()
+    defaults = write_nerdminer_firmware_defaults(values)
+    defaults["patch"] = patch
+    defaults["message"] = "Firmware API patch and private defaults are ready. Rebuild and flash NerdMiner_v2 once; after that, use Apply to Patched ESP32 for live changes."
+    return defaults
 
 
 def redact_log_line(line: str) -> str:
@@ -780,7 +848,7 @@ def html() -> str:
   <link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230d1218'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='34' font-family='Arial' font-weight='700' fill='%2300ff9c'%3EBA%3C/text%3E%3C/svg%3E\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard.css\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard-polish.css\">
-  <link rel=\"stylesheet\" href=\"/assets/dashboard-redesign.css?v=20260510-serial\">
+  <link rel=\"stylesheet\" href=\"/assets/dashboard-redesign.css?v=20260510-firmware-defaults\">
 </head>
 <body>
   <div class=\"app-shell\">
@@ -1090,6 +1158,7 @@ def html() -> str:
               <div class=\"mini-card\"><div class=\"mini-label\">Serial Ports</div><div class=\"stat-value\" id=\"esp32PortsValue\">-</div><div class=\"muted\" id=\"esp32PortsHint\">Connect an ESP32 miner by USB.</div></div>
               <div class=\"mini-card\"><div class=\"mini-label\">Build Targets</div><div class=\"stat-value\" id=\"esp32EnvsValue\">-</div><div class=\"muted\" id=\"esp32EnvsHint\">PlatformIO environments from NerdMiner_v2.</div></div>
               <div class=\"mini-card\"><div class=\"mini-label\">Firmware Files</div><div class=\"stat-value\" id=\"esp32BundlesValue\">-</div><div class=\"muted\" id=\"esp32BundlesHint\">Prebuilt .bin bundles found.</div></div>
+              <div class=\"mini-card\"><div class=\"mini-label\">Config API</div><div class=\"stat-value\" id=\"esp32ApiPatchValue\">-</div><div class=\"muted\" id=\"esp32ApiPatchHint\">Install patch, rebuild, and flash once.</div></div>
             </div>
             <div class=\"provisioning-card\">
               <div class=\"section-head\">
@@ -1097,10 +1166,15 @@ def html() -> str:
                   <div class=\"eyebrow\">Provisioning</div>
                   <h2 class=\"heading-md\">Pool, Wi-Fi, and Wallet</h2>
                 </div>
-                <button type=\"button\" class=\"btn-secondary\" id=\"nerdminerRefreshConfigBtn\">Reload Settings</button>
+                <div class=\"toolbar-group\">
+                  <button type=\"button\" class=\"btn-secondary\" id=\"installNerdminerApiPatchBtn\">Install Firmware API Patch</button>
+                  <button type=\"button\" class=\"btn-secondary\" id=\"buildNerdminerFirmwareDefaultsBtn\">Build Config Into Firmware</button>
+                  <button type=\"button\" class=\"btn-secondary\" id=\"nerdminerRefreshConfigBtn\">Reload Settings</button>
+                </div>
               </div>
               <div id=\"nerdminerConfigMessage\" class=\"decision-hint\">Loading NerdMiner provisioning settings.</div>
               <form id=\"nerdminerConfigForm\" class=\"nerdminer-config-grid\">
+                <label><span class=\"mini-label\">NerdMiner URL</span><input name=\"DeviceUrl\" autocomplete=\"off\" placeholder=\"http://192.168.178.85\"></label>
                 <label><span class=\"mini-label\">Wi-Fi Name</span><input name=\"SSID\" autocomplete=\"off\" placeholder=\"Home Wi-Fi\"></label>
                 <label><span class=\"mini-label\">Wi-Fi Password</span><input name=\"WifiPW\" type=\"password\" autocomplete=\"new-password\" placeholder=\"Leave blank to keep saved password\"></label>
                 <label><span class=\"mini-label\">Pool Host</span><input name=\"PoolUrl\" autocomplete=\"off\" placeholder=\"public-pool.io\"></label>
@@ -1112,6 +1186,7 @@ def html() -> str:
               </form>
               <div class=\"save-row\">
                 <button type=\"submit\" form=\"nerdminerConfigForm\">Save NerdMiner Settings</button>
+                <button type=\"button\" class=\"btn-secondary\" id=\"applyNerdminerLiveConfigBtn\">Apply to Patched ESP32</button>
                 <button type=\"button\" class=\"btn-secondary\" id=\"copyNerdminerConfigBtn\">Copy SD Config JSON</button>
               </div>
               <pre id=\"nerdminerConfigPreview\" class=\"compact-pre\"></pre>
@@ -1210,7 +1285,7 @@ def html() -> str:
     </main>
   </div>
 
-  <script src=\"/assets/dashboard-app.js?v=20260510-serial\"></script>
+  <script src=\"/assets/dashboard-app.js?v=20260510-firmware-defaults\"></script>
 </body>
 </html>"""
 
@@ -1311,6 +1386,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/nerdminer/config":
                 self._send_json(write_nerdminer_config(payload))
+                return
+            if path == "/api/nerdminer/apply":
+                self._send_json(apply_nerdminer_config_to_device(payload))
+                return
+            if path == "/api/nerdminer/firmware-defaults":
+                self._send_json(build_nerdminer_firmware_defaults(payload))
+                return
+            if path == "/api/esp32/api-patch":
+                self._send_json(apply_nerdminer_config_api_patch())
                 return
             if path == "/api/action":
                 action = payload.get("action")

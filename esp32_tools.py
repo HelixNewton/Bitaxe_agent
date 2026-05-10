@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import select
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -51,6 +52,157 @@ def firmware_bundles(root: Path) -> list[dict]:
             "size": path.stat().st_size,
         })
     return bundles
+
+
+def firmware_patch_source_dir() -> Path:
+    return app_base_dir() / "firmware" / "nerdminer_config_api"
+
+
+def insert_once(text: str, marker: str, insertion: str, label: str) -> tuple[str, bool]:
+    if insertion in text:
+        return text, False
+    if marker not in text:
+        raise ValueError(f"Unable to patch NerdMiner firmware: missing {label}")
+    return text.replace(marker, marker + insertion, 1), True
+
+
+def cpp_string_literal(value: object) -> str:
+    text = "" if value is None else str(value)
+    escaped = (
+        text.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
+def exclude_from_git(root: Path, relative_path: str) -> None:
+    exclude_path = root / ".git" / "info" / "exclude"
+    if not exclude_path.exists():
+        return
+    existing = exclude_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    if relative_path not in existing:
+        exclude_path.write_text("\n".join([*existing, relative_path]) + "\n", encoding="utf-8")
+
+
+def nerdminer_config_api_patch_status(root: Path | None = None) -> dict:
+    project_root = root or nerdminer_root()
+    if not project_root:
+        return {"available": False, "installed": False, "message": "NerdMiner_v2 workspace not found."}
+    main_path = project_root / "src" / "NerdMinerV2.ino.cpp"
+    header_path = project_root / "src" / "config_api.h"
+    source_path = project_root / "src" / "config_api.cpp"
+    local_header_path = project_root / "src" / "config_api_local.h"
+    main_text = main_path.read_text(encoding="utf-8", errors="ignore") if main_path.exists() else ""
+    checks = {
+        "header": header_path.exists(),
+        "source": source_path.exists(),
+        "local_defaults": local_header_path.exists(),
+        "include": '#include "config_api.h"' in main_text,
+        "defaults": "applyConfigApiDefaults();" in main_text,
+        "setup": "setupConfigApi();" in main_text,
+        "loop": "configApiLoop();" in main_text,
+    }
+    installed = all(value for key, value in checks.items() if key != "local_defaults")
+    return {
+        "available": True,
+        "installed": installed,
+        "root": str(project_root),
+        "checks": checks,
+        "defaults_header": str(local_header_path) if local_header_path.exists() else "",
+        "message": "NerdMiner config API patch is installed." if installed else "NerdMiner config API patch is not installed.",
+    }
+
+
+def apply_nerdminer_config_api_patch(root: Path | None = None) -> dict:
+    project_root = root or nerdminer_root()
+    if not project_root:
+        raise RuntimeError("NerdMiner_v2 workspace not found. Set NERDMINER_ROOT first.")
+    source_dir = firmware_patch_source_dir()
+    main_path = project_root / "src" / "NerdMinerV2.ino.cpp"
+    if not main_path.exists():
+        raise RuntimeError(f"{main_path} was not found")
+    if not (source_dir / "config_api.cpp").exists():
+        raise RuntimeError(f"Patch source missing at {source_dir}")
+
+    changed: list[str] = []
+    for name in ("config_api.h", "config_api.cpp"):
+        source = source_dir / name
+        target = project_root / "src" / name
+        new_text = source.read_text(encoding="utf-8")
+        old_text = target.read_text(encoding="utf-8") if target.exists() else None
+        if old_text != new_text:
+            shutil.copyfile(source, target)
+            changed.append(str(target.relative_to(project_root)).replace("\\", "/"))
+
+    main_text = main_path.read_text(encoding="utf-8", errors="ignore")
+    main_text, did_change = insert_once(main_text, '#include "monitor.h"\n', '#include "config_api.h"\n', "monitor include")
+    if did_change:
+        changed.append("src/NerdMinerV2.ino.cpp#include")
+    main_text, did_change = insert_once(main_text, "  /******** INIT WIFI ************/\n", "  applyConfigApiDefaults();\n", "Wi-Fi init block")
+    if did_change:
+        changed.append("src/NerdMinerV2.ino.cpp#defaults")
+    main_text, did_change = insert_once(main_text, "  init_WifiManager();\n", "\n  setupConfigApi();\n", "init_WifiManager call")
+    if did_change:
+        changed.append("src/NerdMinerV2.ino.cpp#setup")
+    main_text, did_change = insert_once(main_text, "  wifiManagerProcess(); // avoid delays() in loop when non-blocking and other long running code\n", "  configApiLoop();\n", "wifiManagerProcess call")
+    if did_change:
+        changed.append("src/NerdMinerV2.ino.cpp#loop")
+    main_path.write_text(main_text, encoding="utf-8")
+
+    status = nerdminer_config_api_patch_status(project_root)
+    status.update({
+        "ok": True,
+        "changed": changed,
+        "message": "NerdMiner config API patch installed. Rebuild and flash the firmware for it to run on the ESP32." if changed else "NerdMiner config API patch was already installed.",
+    })
+    return status
+
+
+def write_nerdminer_firmware_defaults(values: dict, root: Path | None = None) -> dict:
+    project_root = root or nerdminer_root()
+    if not project_root:
+        raise RuntimeError("NerdMiner_v2 workspace not found. Set NERDMINER_ROOT first.")
+    src_dir = project_root / "src"
+    if not src_dir.exists():
+        raise RuntimeError(f"{src_dir} was not found")
+
+    header_path = src_dir / "config_api_local.h"
+    pool_port = int(values.get("PoolPort") or 21496)
+    timezone = int(values.get("Timezone") or 2)
+    save_stats = str(bool(values.get("SaveStats"))).lower()
+    text = "\n".join([
+        "#ifndef NERDMINER_CONFIG_API_LOCAL_H",
+        "#define NERDMINER_CONFIG_API_LOCAL_H",
+        "",
+        "// Generated by Bitaxe Agent. Keep this file private; it may contain Wi-Fi and wallet settings.",
+        f"#define CONFIG_API_WIFI_SSID {cpp_string_literal(values.get('SSID') or '')}",
+        f"#define CONFIG_API_WIFI_PASSWORD {cpp_string_literal(values.get('WifiPW') or '')}",
+        f"#define CONFIG_API_POOL_URL {cpp_string_literal(values.get('PoolUrl') or 'public-pool.io')}",
+        f"#define CONFIG_API_POOL_PORT {pool_port}",
+        f"#define CONFIG_API_POOL_PASSWORD {cpp_string_literal(values.get('PoolPassword') or 'x')}",
+        f"#define CONFIG_API_WALLET {cpp_string_literal(values.get('BtcWallet') or '')}",
+        f"#define CONFIG_API_TIMEZONE {timezone}",
+        f"#define CONFIG_API_SAVE_STATS {save_stats}",
+        "#define CONFIG_API_FORCE_DEFAULTS false",
+        "",
+        "#endif",
+        "",
+    ])
+    changed = header_path.read_text(encoding="utf-8", errors="ignore") != text if header_path.exists() else True
+    header_path.write_text(text, encoding="utf-8")
+    exclude_from_git(project_root, "src/config_api_local.h")
+
+    status = nerdminer_config_api_patch_status(project_root)
+    status.update({
+        "ok": True,
+        "changed": ["src/config_api_local.h"] if changed else [],
+        "defaults_header": str(header_path),
+        "message": "Firmware defaults written. Rebuild and flash NerdMiner_v2 once so the ESP32 can join Wi-Fi and expose the dashboard API.",
+    })
+    return status
 
 
 def serial_ports() -> list[dict]:
@@ -225,6 +377,7 @@ def esp32_status() -> dict:
             "ports": serial_ports(),
             "envs": [],
             "firmware_bundles": [],
+            "config_api_patch": {"available": False, "installed": False, "message": "NerdMiner_v2 workspace not found."},
             "tools": {"platformio": tool_available("platformio") or tool_available("pio"), "esptool": tool_available("esptool")},
         }
     return {
@@ -234,5 +387,6 @@ def esp32_status() -> dict:
         "ports": serial_ports(),
         "envs": platformio_envs(root),
         "firmware_bundles": firmware_bundles(root),
+        "config_api_patch": nerdminer_config_api_patch_status(root),
         "tools": {"platformio": tool_available("platformio") or tool_available("pio"), "esptool": tool_available("esptool")},
     }

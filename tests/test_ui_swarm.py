@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 import ui_server
+import esp32_tools
 
 
 class FakeResponse:
@@ -120,6 +121,86 @@ class SwarmConfigTests(unittest.TestCase):
                 self.assertEqual(raw["SSID"], "Lab WiFi 2")
                 self.assertEqual(raw["PoolPort"], 3333)
                 self.assertFalse(second["values"]["SaveStats"])
+
+    def test_apply_nerdminer_config_posts_to_patched_device(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_file = Path(tmp) / "nerdminer-config.json"
+            sent = {}
+
+            def fake_urlopen(req, timeout):
+                sent["url"] = req.full_url
+                sent["timeout"] = timeout
+                sent["body"] = json.loads(req.data.decode("utf-8"))
+                return FakeResponse(b'{"ok":true,"saved":true,"restart":true}')
+
+            with mock.patch.object(ui_server, "NERDMINER_CONFIG_FILE", config_file), \
+                 mock.patch.object(ui_server.request, "urlopen", side_effect=fake_urlopen):
+                result = ui_server.apply_nerdminer_config_to_device({
+                    "DeviceUrl": "192.168.178.85",
+                    "SSID": "Lab WiFi",
+                    "WifiPW": "secret-wifi",
+                    "PoolUrl": "public-pool.io",
+                    "PoolPort": "21496",
+                    "PoolPassword": "x",
+                    "BtcWallet": "bc1qexample",
+                    "Timezone": "2",
+                    "SaveStats": True,
+                })
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(sent["url"], "http://192.168.178.85/api/config")
+            self.assertEqual(sent["body"]["SSID"], "Lab WiFi")
+            self.assertEqual(sent["body"]["BtcWallet"], "bc1qexample")
+            self.assertTrue(sent["body"]["Restart"])
+            self.assertNotIn("DeviceUrl", sent["body"])
+
+    def test_nerdminer_firmware_api_patch_and_defaults_are_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            git_info = root / ".git" / "info"
+            src.mkdir(parents=True)
+            git_info.mkdir(parents=True)
+            (git_info / "exclude").write_text("# local excludes\n", encoding="utf-8")
+            (root / "platformio.ini").write_text("[env:test]\n", encoding="utf-8")
+            (src / "NerdMinerV2.ino.cpp").write_text(
+                '#include "monitor.h"\n'
+                "void setup() {\n"
+                "  /******** INIT WIFI ************/\n"
+                "  init_WifiManager();\n"
+                "}\n"
+                "void loop() {\n"
+                "  wifiManagerProcess(); // avoid delays() in loop when non-blocking and other long running code\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            patch = esp32_tools.apply_nerdminer_config_api_patch(root)
+            defaults = esp32_tools.write_nerdminer_firmware_defaults({
+                "SSID": "Lab WiFi",
+                "WifiPW": "secret-wifi",
+                "PoolUrl": "public-pool.io",
+                "PoolPort": 21496,
+                "PoolPassword": "x",
+                "BtcWallet": "bc1qexample",
+                "Timezone": 2,
+                "SaveStats": True,
+            }, root)
+            second_patch = esp32_tools.apply_nerdminer_config_api_patch(root)
+
+            main_text = (src / "NerdMinerV2.ino.cpp").read_text(encoding="utf-8")
+            local_header = (src / "config_api_local.h").read_text(encoding="utf-8")
+            exclude_text = (git_info / "exclude").read_text(encoding="utf-8")
+
+            self.assertTrue(patch["installed"])
+            self.assertTrue(defaults["checks"]["local_defaults"])
+            self.assertEqual(second_patch["changed"], [])
+            self.assertIn('#include "config_api.h"', main_text)
+            self.assertIn("applyConfigApiDefaults();", main_text)
+            self.assertIn("setupConfigApi();", main_text)
+            self.assertIn("configApiLoop();", main_text)
+            self.assertIn('#define CONFIG_API_WIFI_SSID "Lab WiFi"', local_header)
+            self.assertIn("src/config_api_local.h", exclude_text)
 
     def test_log_redaction_masks_tokens(self):
         line = "OPENAI_API_KEY=sk-secret123456789 PASSWORD hunter2"

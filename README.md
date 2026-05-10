@@ -128,6 +128,24 @@ sudo usermod -aG dialout $USER
 
 Log out and back in, then restart `bitaxe-agent-ui`. If auto-detect picks the wrong port, set `NERDMINER_SERIAL_PORT=/dev/ttyUSB0` in `.env`.
 
+### NerdMiner firmware API
+
+Stock NerdMiner_v2 does not expose the config/status API that this dashboard needs for live pool, Wi-Fi, and wallet changes. For ESP32 boards without SD card access or a usable WiFiManager portal:
+
+1. Clone NerdMiner_v2 beside this project or set `NERDMINER_ROOT=/path/to/NerdMiner_v2` in `.env`.
+2. Open the dashboard, go to **NerdMiner Tools**, and enter the ESP32 Wi-Fi, pool, wallet, and optional device URL.
+3. Click **Build Config Into Firmware**. This installs the API patch and writes a private `src/config_api_local.h` file inside your local NerdMiner_v2 workspace.
+4. Rebuild and flash the NerdMiner_v2 PlatformIO environment for your board.
+5. After the ESP32 boots on Wi-Fi, use **Apply to Patched ESP32** for future live config changes.
+
+The generated `config_api_local.h` may contain Wi-Fi/password/wallet values. It is written outside this repo and added to the local NerdMiner_v2 git exclude file when possible. Do not commit that generated file.
+
+Patched firmware endpoints:
+
+- `GET /api/status`: simple live NerdMiner telemetry for the fleet dashboard.
+- `GET /api/config`: current pool/wallet settings without exposing passwords.
+- `POST /api/config`: updates Wi-Fi, pool, wallet, timezone, and stats settings, then restarts the ESP32 by default.
+
 If a miner accepts different setting keys, map them in `.env`:
 
 ```env
