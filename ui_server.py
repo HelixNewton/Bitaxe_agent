@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import ipaddress
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -11,7 +12,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import error, request
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from esp32_tools import esp32_status
 from miner_adapters import get_adapter
@@ -38,6 +39,10 @@ swarm_file_value = os.getenv("MINER_SWARM_FILE") or "swarm.json"
 SWARM_FILE = Path(swarm_file_value)
 if not SWARM_FILE.is_absolute():
     SWARM_FILE = BASE_DIR / SWARM_FILE
+nerdminer_config_value = os.getenv("NERDMINER_CONFIG_FILE") or "nerdminer-config.json"
+NERDMINER_CONFIG_FILE = Path(nerdminer_config_value)
+if not NERDMINER_CONFIG_FILE.is_absolute():
+    NERDMINER_CONFIG_FILE = BASE_DIR / NERDMINER_CONFIG_FILE
 ENV_FILE = BASE_DIR / ".env"
 ASSETS_DIR = resource_base_dir() / "assets"
 HOST = os.getenv("MINER_UI_HOST") or os.getenv("BITAXE_UI_HOST", "0.0.0.0")
@@ -157,6 +162,24 @@ LIVE_PROBE_TIMEOUT_SECONDS = 0.8
 LIVE_PROBE_CACHE: dict[str, tuple[float, dict]] = {}
 NERDMINER_PROBE_PATHS = ("/api/status", "/status", "/api", "/")
 GENERIC_PROBE_PATHS = ("/api/system/info", "/api/status", "/status", "/api", "/")
+LOG_SERVICES = {
+    "controller": "bitaxe-agent",
+    "ui": "bitaxe-agent-ui",
+}
+DEFAULT_NERDMINER_CONFIG = {
+    "SSID": "",
+    "WifiPW": "",
+    "PoolUrl": "public-pool.io",
+    "PoolPort": 21496,
+    "PoolPassword": "x",
+    "BtcWallet": "",
+    "Timezone": 2,
+    "SaveStats": False,
+}
+SENSITIVE_LOG_PATTERNS = (
+    re.compile(r"(OPENAI_API_KEY|AI_API_KEY|API_KEY|TOKEN|PASSWORD|PASS|SECRET)(=|\s+)([^\s]+)", re.IGNORECASE),
+    re.compile(r"sk-[A-Za-z0-9_-]{12,}"),
+)
 
 
 def sanitize_env_value(key: str, value: str) -> str:
@@ -208,6 +231,117 @@ def write_env_file(updates: dict[str, str]) -> dict[str, str]:
     lines = [f"{key}={value}" for key, value in existing.items()]
     ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return validated
+
+
+def read_nerdminer_config(redacted: bool = True) -> dict:
+    values = dict(DEFAULT_NERDMINER_CONFIG)
+    if NERDMINER_CONFIG_FILE.exists():
+        data = json.loads(NERDMINER_CONFIG_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            for key in DEFAULT_NERDMINER_CONFIG:
+                if key in data:
+                    values[key] = data[key]
+    has_wifi_password = bool(str(values.get("WifiPW") or ""))
+    has_pool_password = bool(str(values.get("PoolPassword") or ""))
+    if redacted:
+        values["WifiPW"] = ""
+        values["PoolPassword"] = ""
+    return {
+        "values": values,
+        "config_file": str(NERDMINER_CONFIG_FILE),
+        "exists": NERDMINER_CONFIG_FILE.exists(),
+        "has_wifi_password": has_wifi_password,
+        "has_pool_password": has_pool_password,
+        "apply_hint": "Saved locally. To apply to stock NerdMiner_v2, copy this JSON to an SD card as /config.json or use the device WiFiManager setup portal.",
+    }
+
+
+def validate_nerdminer_config(payload: dict) -> dict:
+    existing = read_nerdminer_config(redacted=False)["values"]
+    values = dict(existing)
+    string_keys = ("SSID", "WifiPW", "PoolUrl", "PoolPassword", "BtcWallet")
+    for key in string_keys:
+        if key not in payload:
+            continue
+        value = str(payload.get(key) or "").strip()
+        if any(char in value for char in ("\x00", "\n", "\r")):
+            raise ValueError(f"{key} cannot contain line breaks")
+        if key in {"WifiPW", "PoolPassword"} and value == "":
+            continue
+        values[key] = value
+    if "PoolPort" in payload:
+        try:
+            pool_port = int(str(payload.get("PoolPort") or "").strip())
+        except ValueError as exc:
+            raise ValueError("PoolPort must be a number") from exc
+        if pool_port < 1 or pool_port > 65535:
+            raise ValueError("PoolPort must be between 1 and 65535")
+        values["PoolPort"] = pool_port
+    if "Timezone" in payload:
+        try:
+            timezone = int(str(payload.get("Timezone") or "").strip())
+        except ValueError as exc:
+            raise ValueError("Timezone must be a number") from exc
+        if timezone < -12 or timezone > 14:
+            raise ValueError("Timezone must be between -12 and 14")
+        values["Timezone"] = timezone
+    if "SaveStats" in payload:
+        raw = payload.get("SaveStats")
+        values["SaveStats"] = raw is True or str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return values
+
+
+def write_nerdminer_config(payload: dict) -> dict:
+    values = validate_nerdminer_config(payload)
+    NERDMINER_CONFIG_FILE.write_text(json.dumps(values, indent=2) + "\n", encoding="utf-8")
+    return read_nerdminer_config(redacted=True)
+
+
+def redact_log_line(line: str) -> str:
+    redacted = line
+    for pattern in SENSITIVE_LOG_PATTERNS:
+        redacted = pattern.sub(lambda match: f"{match.group(1)}{match.group(2)}[redacted]" if match.lastindex and match.lastindex >= 2 else "[redacted]", redacted)
+    return redacted
+
+
+def service_logs(service: str, lines: int) -> dict:
+    service_key = (service or "controller").strip().lower()
+    unit = LOG_SERVICES.get(service_key)
+    if not unit:
+        raise ValueError(f"service must be one of: {', '.join(sorted(LOG_SERVICES))}")
+    bounded_lines = max(20, min(int(lines or 120), 500))
+    try:
+        result = subprocess.run(
+            ["journalctl", "-u", unit, "-n", str(bounded_lines), "--no-pager", "--output", "short-iso"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=8,
+        )
+    except FileNotFoundError:
+        return {
+            "ok": False,
+            "service": service_key,
+            "unit": unit,
+            "lines": [],
+            "message": "journalctl is not available on this system.",
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "service": service_key,
+            "unit": unit,
+            "lines": [],
+            "message": "Log request timed out.",
+        }
+    output = result.stdout if result.returncode == 0 else result.stderr or result.stdout
+    return {
+        "ok": result.returncode == 0,
+        "service": service_key,
+        "unit": unit,
+        "lines": [redact_log_line(line) for line in output.splitlines()[-bounded_lines:]],
+        "message": "Logs loaded." if result.returncode == 0 else "Unable to read service logs.",
+    }
 
 
 def read_status() -> dict:
@@ -639,7 +773,7 @@ def html() -> str:
   <link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230d1218'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='34' font-family='Arial' font-weight='700' fill='%2300ff9c'%3EBA%3C/text%3E%3C/svg%3E\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard.css\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard-polish.css\">
-  <link rel=\"stylesheet\" href=\"/assets/dashboard-redesign.css?v=20260509-flow\">
+  <link rel=\"stylesheet\" href=\"/assets/dashboard-redesign.css?v=20260510-settings\">
 </head>
 <body>
   <div class=\"app-shell\">
@@ -950,6 +1084,31 @@ def html() -> str:
               <div class=\"mini-card\"><div class=\"mini-label\">Build Targets</div><div class=\"stat-value\" id=\"esp32EnvsValue\">-</div><div class=\"muted\" id=\"esp32EnvsHint\">PlatformIO environments from NerdMiner_v2.</div></div>
               <div class=\"mini-card\"><div class=\"mini-label\">Firmware Files</div><div class=\"stat-value\" id=\"esp32BundlesValue\">-</div><div class=\"muted\" id=\"esp32BundlesHint\">Prebuilt .bin bundles found.</div></div>
             </div>
+            <div class=\"provisioning-card\">
+              <div class=\"section-head\">
+                <div>
+                  <div class=\"eyebrow\">Provisioning</div>
+                  <h2 class=\"heading-md\">Pool, Wi-Fi, and Wallet</h2>
+                </div>
+                <button type=\"button\" class=\"btn-secondary\" id=\"nerdminerRefreshConfigBtn\">Reload Settings</button>
+              </div>
+              <div id=\"nerdminerConfigMessage\" class=\"decision-hint\">Loading NerdMiner provisioning settings.</div>
+              <form id=\"nerdminerConfigForm\" class=\"nerdminer-config-grid\">
+                <label><span class=\"mini-label\">Wi-Fi Name</span><input name=\"SSID\" autocomplete=\"off\" placeholder=\"Home Wi-Fi\"></label>
+                <label><span class=\"mini-label\">Wi-Fi Password</span><input name=\"WifiPW\" type=\"password\" autocomplete=\"new-password\" placeholder=\"Leave blank to keep saved password\"></label>
+                <label><span class=\"mini-label\">Pool Host</span><input name=\"PoolUrl\" autocomplete=\"off\" placeholder=\"public-pool.io\"></label>
+                <label><span class=\"mini-label\">Pool Port</span><input name=\"PoolPort\" inputmode=\"numeric\" placeholder=\"21496\"></label>
+                <label><span class=\"mini-label\">Pool Password</span><input name=\"PoolPassword\" type=\"password\" autocomplete=\"new-password\" placeholder=\"Leave blank to keep saved password\"></label>
+                <label><span class=\"mini-label\">Wallet Address</span><input name=\"BtcWallet\" autocomplete=\"off\" placeholder=\"bc1...\"></label>
+                <label><span class=\"mini-label\">Timezone</span><input name=\"Timezone\" inputmode=\"numeric\" placeholder=\"2\"></label>
+                <label class=\"checkbox-row\"><input name=\"SaveStats\" type=\"checkbox\"><span>Save mining stats on ESP32 flash</span></label>
+              </form>
+              <div class=\"save-row\">
+                <button type=\"submit\" form=\"nerdminerConfigForm\">Save NerdMiner Settings</button>
+                <button type=\"button\" class=\"btn-secondary\" id=\"copyNerdminerConfigBtn\">Copy SD Config JSON</button>
+              </div>
+              <pre id=\"nerdminerConfigPreview\" class=\"compact-pre\"></pre>
+            </div>
           </div>
         </div>
       </section>
@@ -980,6 +1139,25 @@ def html() -> str:
                     </div>
                   </div>
                   <div id=\"activityLog\" class=\"activity-log\"></div>
+                </div>
+              </div>
+              <div class=\"panel\" style=\"margin-top:14px;\">
+                <div class=\"panel-body\">
+                  <div class=\"section-head\">
+                    <div>
+                      <div class=\"eyebrow\">Logs</div>
+                      <h2 class=\"heading-md\">Service Logs</h2>
+                    </div>
+                    <div class=\"toolbar-group\">
+                      <select id=\"logServiceSelect\">
+                        <option value=\"controller\">Controller</option>
+                        <option value=\"ui\">Dashboard UI</option>
+                      </select>
+                      <button type=\"button\" class=\"btn-secondary\" id=\"refreshLogsBtn\">Refresh Logs</button>
+                    </div>
+                  </div>
+                  <div id=\"logsMessage\" class=\"muted\">Loading logs.</div>
+                  <pre id=\"serviceLogs\" class=\"log-viewer\"></pre>
                 </div>
               </div>
             </div>
@@ -1023,7 +1201,7 @@ def html() -> str:
     </main>
   </div>
 
-  <script src=\"/assets/dashboard-app.js?v=20260509-app\"></script>
+  <script src=\"/assets/dashboard-app.js?v=20260510-settings\"></script>
 </body>
 </html>"""
 
@@ -1046,7 +1224,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        parsed_path = urlparse(self.path)
+        path = parsed_path.path
+        query = parse_qs(parsed_path.query)
         if path == "/":
             self._send_html(html())
             return
@@ -1078,6 +1258,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/esp32/status":
             self._send_json(esp32_status())
             return
+        if path == "/api/nerdminer/config":
+            self._send_json(read_nerdminer_config())
+            return
+        if path == "/api/logs":
+            service = query.get("service", ["controller"])[0]
+            try:
+                lines = int(query.get("lines", ["120"])[0])
+            except ValueError:
+                lines = 120
+            self._send_json(service_logs(service, lines))
+            return
         if path in {"/health", "/api/health"}:
             health = health_status()
             self._send_json(health, status=200 if health.get("ok") else 503)
@@ -1107,6 +1298,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/swarm/remove":
                 self._send_json(remove_swarm_miner(payload))
+                return
+            if path == "/api/nerdminer/config":
+                self._send_json(write_nerdminer_config(payload))
                 return
             if path == "/api/action":
                 action = payload.get("action")

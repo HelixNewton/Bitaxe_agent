@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -86,6 +87,47 @@ class SwarmConfigTests(unittest.TestCase):
 
             self.assertTrue(summary["online"])
             self.assertIn("does not expose live stats", summary["last_error"])
+
+    def test_nerdminer_config_preserves_blank_passwords(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_file = Path(tmp) / "nerdminer-config.json"
+            with mock.patch.object(ui_server, "NERDMINER_CONFIG_FILE", config_file):
+                first = ui_server.write_nerdminer_config({
+                    "SSID": "Lab WiFi",
+                    "WifiPW": "secret-wifi",
+                    "PoolUrl": "public-pool.io",
+                    "PoolPort": "21496",
+                    "PoolPassword": "x",
+                    "BtcWallet": "bc1qexample",
+                    "Timezone": "2",
+                    "SaveStats": True,
+                })
+                self.assertEqual(first["values"]["WifiPW"], "")
+                self.assertTrue(first["has_wifi_password"])
+
+                second = ui_server.write_nerdminer_config({
+                    "SSID": "Lab WiFi 2",
+                    "WifiPW": "",
+                    "PoolPassword": "",
+                    "PoolPort": "3333",
+                    "Timezone": "1",
+                    "SaveStats": False,
+                })
+                raw = json.loads(config_file.read_text(encoding="utf-8"))
+
+                self.assertEqual(raw["WifiPW"], "secret-wifi")
+                self.assertEqual(raw["PoolPassword"], "x")
+                self.assertEqual(raw["SSID"], "Lab WiFi 2")
+                self.assertEqual(raw["PoolPort"], 3333)
+                self.assertFalse(second["values"]["SaveStats"])
+
+    def test_log_redaction_masks_tokens(self):
+        line = "OPENAI_API_KEY=sk-secret123456789 PASSWORD hunter2"
+
+        redacted = ui_server.redact_log_line(line)
+
+        self.assertNotIn("sk-secret", redacted)
+        self.assertNotIn("hunter2", redacted)
 
 
 if __name__ == "__main__":

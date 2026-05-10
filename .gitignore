@@ -8,6 +8,7 @@ __pycache__/
 status.json
 learning.json
 swarm.json
+nerdminer-config.json
 status-*.json
 learning-*.json
 startup.log

@@ -60,6 +60,7 @@
     let chartVisible = false;
     let lastConfigSignature = "";
     let lastOverviewSignature = "";
+    let lastNerdminerConfig = null;
     let reconnectAttempts = 0;
 
     const dom = {
@@ -147,8 +148,14 @@
       esp32EnvsHint: document.getElementById("esp32EnvsHint"),
       esp32BundlesValue: document.getElementById("esp32BundlesValue"),
       esp32BundlesHint: document.getElementById("esp32BundlesHint"),
+      nerdminerConfigForm: document.getElementById("nerdminerConfigForm"),
+      nerdminerConfigMessage: document.getElementById("nerdminerConfigMessage"),
+      nerdminerConfigPreview: document.getElementById("nerdminerConfigPreview"),
       configForm: document.getElementById("configForm"),
       saveMessage: document.getElementById("saveMessage"),
+      logServiceSelect: document.getElementById("logServiceSelect"),
+      logsMessage: document.getElementById("logsMessage"),
+      serviceLogs: document.getElementById("serviceLogs"),
       decision: document.getElementById("decision"),
       raw: document.getElementById("raw"),
       activityLog: document.getElementById("activityLog"),
@@ -628,6 +635,70 @@
       }
     }
 
+    function renderNerdminerConfig(payload) {
+      lastNerdminerConfig = payload || {};
+      const values = lastNerdminerConfig.values || {};
+      ["SSID", "PoolUrl", "PoolPort", "BtcWallet", "Timezone"].forEach((key) => {
+        if (dom.nerdminerConfigForm.elements[key]) dom.nerdminerConfigForm.elements[key].value = values[key] ?? "";
+      });
+      dom.nerdminerConfigForm.elements.WifiPW.value = "";
+      dom.nerdminerConfigForm.elements.PoolPassword.value = "";
+      dom.nerdminerConfigForm.elements.SaveStats.checked = values.SaveStats === true || String(values.SaveStats).toLowerCase() === "true";
+      const passwordNote = [
+        lastNerdminerConfig.has_wifi_password ? "Wi-Fi password saved" : "Wi-Fi password empty",
+        lastNerdminerConfig.has_pool_password ? "pool password saved" : "pool password empty"
+      ].join(" / ");
+      dom.nerdminerConfigMessage.textContent = `${lastNerdminerConfig.exists ? "Local NerdMiner config loaded" : "No local NerdMiner config yet"} at ${lastNerdminerConfig.config_file || "nerdminer-config.json"}. ${passwordNote}.`;
+      const preview = {
+        SSID: values.SSID || "",
+        WifiPW: lastNerdminerConfig.has_wifi_password ? "[saved password]" : "",
+        PoolUrl: values.PoolUrl || "",
+        PoolPassword: lastNerdminerConfig.has_pool_password ? "[saved password]" : "",
+        BtcWallet: values.BtcWallet || "",
+        PoolPort: Number(values.PoolPort) || 21496,
+        Timezone: Number(values.Timezone) || 2,
+        SaveStats: Boolean(values.SaveStats)
+      };
+      dom.nerdminerConfigPreview.textContent = JSON.stringify(preview, null, 2);
+    }
+
+    function collectNerdminerConfig() {
+      const form = dom.nerdminerConfigForm;
+      return {
+        SSID: form.elements.SSID.value,
+        WifiPW: form.elements.WifiPW.value,
+        PoolUrl: form.elements.PoolUrl.value,
+        PoolPort: form.elements.PoolPort.value,
+        PoolPassword: form.elements.PoolPassword.value,
+        BtcWallet: form.elements.BtcWallet.value,
+        Timezone: form.elements.Timezone.value,
+        SaveStats: form.elements.SaveStats.checked
+      };
+    }
+
+    async function refreshNerdminerConfig() {
+      try {
+        const config = await fetchJson("/api/nerdminer/config", {}, 0);
+        renderNerdminerConfig(config);
+      } catch (error) {
+        dom.nerdminerConfigMessage.textContent = `NerdMiner settings failed to load: ${error.message}`;
+      }
+    }
+
+    async function refreshLogs() {
+      const service = dom.logServiceSelect.value || "controller";
+      dom.logsMessage.textContent = "Loading service logs...";
+      try {
+        const params = new URLSearchParams({ service, lines: "140" });
+        const payload = await fetchJson(`/api/logs?${params.toString()}`, {}, 0);
+        dom.logsMessage.textContent = `${payload.message || "Logs loaded."} ${payload.unit ? `(${payload.unit})` : ""}`;
+        dom.serviceLogs.textContent = (payload.lines || []).join("\n") || "No log lines returned.";
+      } catch (error) {
+        dom.logsMessage.textContent = `Log request failed: ${error.message}`;
+        dom.serviceLogs.textContent = "";
+      }
+    }
+
     function presetDistance(config, preset) {
       return Object.entries(preset).reduce((score, [key, value]) => {
         if (String(config[key] ?? "") === String(value)) return score;
@@ -980,6 +1051,46 @@
     };
 
     document.getElementById("esp32RefreshBtn").onclick = refreshEsp32Status;
+    document.getElementById("nerdminerRefreshConfigBtn").onclick = refreshNerdminerConfig;
+    document.getElementById("refreshLogsBtn").onclick = refreshLogs;
+    dom.logServiceSelect.onchange = refreshLogs;
+
+    dom.nerdminerConfigForm.onsubmit = async (event) => {
+      event.preventDefault();
+      dom.nerdminerConfigMessage.textContent = "Saving NerdMiner provisioning settings...";
+      try {
+        const result = await fetchJson("/api/nerdminer/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(collectNerdminerConfig())
+        }, 0);
+        renderNerdminerConfig(result);
+        dom.nerdminerConfigMessage.textContent = `${result.apply_hint || "Saved locally."} Restart or reprovision the ESP32 for these settings to take effect.`;
+        pushActivity("NerdMiner", "Pool, Wi-Fi, and wallet settings were saved locally.");
+      } catch (error) {
+        dom.nerdminerConfigMessage.textContent = `Save failed: ${error.message}`;
+      }
+    };
+
+    document.getElementById("copyNerdminerConfigBtn").onclick = async () => {
+      const values = collectNerdminerConfig();
+      if (!values.WifiPW && lastNerdminerConfig?.has_wifi_password) {
+        dom.nerdminerConfigMessage.textContent = "Enter the Wi-Fi password before copying; hidden saved passwords are not exposed in the browser.";
+        return;
+      }
+      if (!values.PoolPassword && lastNerdminerConfig?.has_pool_password) {
+        dom.nerdminerConfigMessage.textContent = "Enter the pool password before copying; hidden saved passwords are not exposed in the browser.";
+        return;
+      }
+      values.PoolPort = Number(values.PoolPort) || 21496;
+      values.Timezone = Number(values.Timezone) || 2;
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(values, null, 2));
+        dom.nerdminerConfigMessage.textContent = "SD-card config JSON copied. Save it as /config.json on the card for stock NerdMiner_v2.";
+      } catch (error) {
+        dom.nerdminerConfigMessage.textContent = "Clipboard copy failed.";
+      }
+    };
 
     dom.swarmAddForm.onsubmit = async (event) => {
       event.preventDefault();
@@ -1089,5 +1200,7 @@
     setupSearch();
     restoreEfficiencySettings();
     refreshEsp32Status();
+    refreshNerdminerConfig();
+    refreshLogs();
     refresh();
     scheduleRefresh();
