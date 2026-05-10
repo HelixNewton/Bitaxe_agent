@@ -129,6 +129,22 @@ class SwarmConfigTests(unittest.TestCase):
         self.assertNotIn("sk-secret", redacted)
         self.assertNotIn("hunter2", redacted)
 
+    def test_nerdminer_serial_logs_use_selected_port(self):
+        with mock.patch.object(ui_server, "read_serial_log", return_value={
+            "ok": True,
+            "service": "nerdminer",
+            "unit": "serial",
+            "port": "/dev/ttyUSB0",
+            "lines": ["NerdMiner v2 starting", "OPENAI_API_KEY=sk-secret123456789"],
+            "message": "Captured 2 serial log line(s) from /dev/ttyUSB0.",
+        }) as serial_log:
+            payload = ui_server.service_logs("nerdminer", 20, port="/dev/ttyUSB0")
+
+        serial_log.assert_called_once_with(port="/dev/ttyUSB0", seconds=3.5)
+        self.assertEqual(payload["port"], "/dev/ttyUSB0")
+        self.assertIn("NerdMiner v2 starting", payload["lines"][0])
+        self.assertNotIn("sk-secret", "\n".join(payload["lines"]))
+
 
 if __name__ == "__main__":
     unittest.main()

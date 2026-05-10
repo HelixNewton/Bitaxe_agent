@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib import error, request
 from urllib.parse import parse_qs, urlparse
 
-from esp32_tools import esp32_status
+from esp32_tools import esp32_status, read_serial_log
 from miner_adapters import get_adapter
 
 
@@ -65,6 +65,8 @@ EDITABLE_KEYS = {
     "MINER_SWARM_FILE",
     "MINER_UI_HOST",
     "MINER_UI_PORT",
+    "NERDMINER_SERIAL_PORT",
+    "NERDMINER_CONFIG_FILE",
     "BITAXE_URL",
     "BITAXE_RESTART_PATH",
     "BITAXE_MODE",
@@ -304,11 +306,16 @@ def redact_log_line(line: str) -> str:
     return redacted
 
 
-def service_logs(service: str, lines: int) -> dict:
+def service_logs(service: str, lines: int, port: str = "") -> dict:
     service_key = (service or "controller").strip().lower()
+    if service_key == "nerdminer":
+        payload = read_serial_log(port=port, seconds=3.5)
+        payload["lines"] = [redact_log_line(line) for line in payload.get("lines", [])[-max(20, min(int(lines or 120), 500)):]]
+        return payload
     unit = LOG_SERVICES.get(service_key)
     if not unit:
-        raise ValueError(f"service must be one of: {', '.join(sorted(LOG_SERVICES))}")
+        supported = sorted([*LOG_SERVICES.keys(), "nerdminer"])
+        raise ValueError(f"service must be one of: {', '.join(supported)}")
     bounded_lines = max(20, min(int(lines or 120), 500))
     try:
         result = subprocess.run(
@@ -773,7 +780,7 @@ def html() -> str:
   <link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230d1218'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='34' font-family='Arial' font-weight='700' fill='%2300ff9c'%3EBA%3C/text%3E%3C/svg%3E\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard.css\">
   <link rel=\"stylesheet\" href=\"/assets/dashboard-polish.css\">
-  <link rel=\"stylesheet\" href=\"/assets/dashboard-redesign.css?v=20260510-settings\">
+  <link rel=\"stylesheet\" href=\"/assets/dashboard-redesign.css?v=20260510-serial\">
 </head>
 <body>
   <div class=\"app-shell\">
@@ -1152,7 +1159,9 @@ def html() -> str:
                       <select id=\"logServiceSelect\">
                         <option value=\"controller\">Controller</option>
                         <option value=\"ui\">Dashboard UI</option>
+                        <option value=\"nerdminer\">NerdMiner Serial</option>
                       </select>
+                      <select id=\"serialLogPortSelect\"></select>
                       <button type=\"button\" class=\"btn-secondary\" id=\"refreshLogsBtn\">Refresh Logs</button>
                     </div>
                   </div>
@@ -1201,7 +1210,7 @@ def html() -> str:
     </main>
   </div>
 
-  <script src=\"/assets/dashboard-app.js?v=20260510-settings\"></script>
+  <script src=\"/assets/dashboard-app.js?v=20260510-serial\"></script>
 </body>
 </html>"""
 
@@ -1263,11 +1272,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/logs":
             service = query.get("service", ["controller"])[0]
+            port = query.get("port", [""])[0]
             try:
                 lines = int(query.get("lines", ["120"])[0])
             except ValueError:
                 lines = 120
-            self._send_json(service_logs(service, lines))
+            self._send_json(service_logs(service, lines, port=port))
             return
         if path in {"/health", "/api/health"}:
             health = health_status()

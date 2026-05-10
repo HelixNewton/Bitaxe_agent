@@ -2,6 +2,7 @@
       "MINER_NAME", "MINER_URL", "MINER_API_PROFILE", "MINER_INFO_PATH", "MINER_ASIC_PATH", "MINER_SETTINGS_PATH", "MINER_RESTART_PATH",
       "MINER_FREQUENCY_FIELD", "MINER_VOLTAGE_FIELD", "MINER_FAN_SPEED_FIELD", "MINER_AUTO_FAN_FIELD",
       "MINER_STATUS_FILE", "MINER_LEARNING_FILE", "MINER_SWARM_FILE", "MINER_UI_HOST", "MINER_UI_PORT",
+      "NERDMINER_SERIAL_PORT", "NERDMINER_CONFIG_FILE",
       "BITAXE_URL", "BITAXE_MODE", "BITAXE_DRY_RUN", "BITAXE_AUTO_FAN", "BITAXE_LOOP_SECONDS",
       "BITAXE_MIN_FREQUENCY", "BITAXE_MAX_FREQUENCY", "BITAXE_ABSOLUTE_MAX_FREQUENCY", "BITAXE_FREQ_STEP", "BITAXE_MIN_VOLTAGE",
       "BITAXE_MAX_VOLTAGE", "BITAXE_ABSOLUTE_MAX_VOLTAGE", "BITAXE_VOLTAGE_STEP", "BITAXE_TARGET_TEMP_C", "BITAXE_HOT_TEMP_C",
@@ -16,7 +17,7 @@
       "BITAXE_STEP_COOLDOWN_SECONDS", "BITAXE_USE_ASIC_OPTIONS"
     ];
     const groups = {
-      "Miner": ["MINER_NAME", "MINER_URL", "MINER_API_PROFILE", "MINER_INFO_PATH", "MINER_ASIC_PATH", "MINER_SETTINGS_PATH", "MINER_RESTART_PATH", "MINER_STATUS_FILE", "MINER_LEARNING_FILE", "MINER_SWARM_FILE", "MINER_UI_HOST", "MINER_UI_PORT"],
+      "Miner": ["MINER_NAME", "MINER_URL", "MINER_API_PROFILE", "MINER_INFO_PATH", "MINER_ASIC_PATH", "MINER_SETTINGS_PATH", "MINER_RESTART_PATH", "MINER_STATUS_FILE", "MINER_LEARNING_FILE", "MINER_SWARM_FILE", "MINER_UI_HOST", "MINER_UI_PORT", "NERDMINER_SERIAL_PORT", "NERDMINER_CONFIG_FILE"],
       "Write Mapping": ["MINER_FREQUENCY_FIELD", "MINER_VOLTAGE_FIELD", "MINER_FAN_SPEED_FIELD", "MINER_AUTO_FAN_FIELD"],
       "Control": ["BITAXE_URL", "BITAXE_MODE", "BITAXE_DRY_RUN", "BITAXE_AUTO_FAN", "BITAXE_LOOP_SECONDS"],
       "Frequency": ["BITAXE_MIN_FREQUENCY", "BITAXE_MAX_FREQUENCY", "BITAXE_ABSOLUTE_MAX_FREQUENCY", "BITAXE_FREQ_STEP", "BITAXE_USE_ASIC_OPTIONS"],
@@ -154,6 +155,7 @@
       configForm: document.getElementById("configForm"),
       saveMessage: document.getElementById("saveMessage"),
       logServiceSelect: document.getElementById("logServiceSelect"),
+      serialLogPortSelect: document.getElementById("serialLogPortSelect"),
       logsMessage: document.getElementById("logsMessage"),
       serviceLogs: document.getElementById("serviceLogs"),
       decision: document.getElementById("decision"),
@@ -619,6 +621,9 @@
       const bundles = status.firmware_bundles || [];
       dom.esp32PortsValue.textContent = String(ports.length);
       dom.esp32PortsHint.textContent = ports.length ? ports.map((port) => port.device || port.name).slice(0, 3).join(", ") : "No serial ports detected.";
+      dom.serialLogPortSelect.innerHTML = ports.length
+        ? ports.map((port) => `<option value="${port.device || port.name}">${port.device || port.name}</option>`).join("")
+        : `<option value="">Auto detect port</option>`;
       dom.esp32EnvsValue.textContent = String(envs.length);
       dom.esp32EnvsHint.textContent = envs.length ? envs.slice(0, 4).join(", ") : "No PlatformIO environments found yet.";
       dom.esp32BundlesValue.textContent = String(bundles.length);
@@ -690,8 +695,9 @@
       dom.logsMessage.textContent = "Loading service logs...";
       try {
         const params = new URLSearchParams({ service, lines: "140" });
+        if (service === "nerdminer" && dom.serialLogPortSelect.value) params.set("port", dom.serialLogPortSelect.value);
         const payload = await fetchJson(`/api/logs?${params.toString()}`, {}, 0);
-        dom.logsMessage.textContent = `${payload.message || "Logs loaded."} ${payload.unit ? `(${payload.unit})` : ""}`;
+        dom.logsMessage.textContent = `${payload.message || "Logs loaded."} ${payload.port ? `(${payload.port})` : payload.unit ? `(${payload.unit})` : ""}`;
         dom.serviceLogs.textContent = (payload.lines || []).join("\n") || "No log lines returned.";
       } catch (error) {
         dom.logsMessage.textContent = `Log request failed: ${error.message}`;
@@ -1054,6 +1060,9 @@
     document.getElementById("nerdminerRefreshConfigBtn").onclick = refreshNerdminerConfig;
     document.getElementById("refreshLogsBtn").onclick = refreshLogs;
     dom.logServiceSelect.onchange = refreshLogs;
+    dom.serialLogPortSelect.onchange = () => {
+      if (dom.logServiceSelect.value === "nerdminer") refreshLogs();
+    };
 
     dom.nerdminerConfigForm.onsubmit = async (event) => {
       event.preventDefault();

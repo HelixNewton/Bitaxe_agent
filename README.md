@@ -120,6 +120,14 @@ Supported miner profiles are:
 
 For non-AxeOS miners, start with `BITAXE_DRY_RUN=true`, set `MINER_INFO_PATH`, `MINER_ASIC_PATH`, and `MINER_SETTINGS_PATH`, then verify the dashboard fields before allowing live control.
 
+For NerdMiner serial logs in the dashboard, connect the ESP32 by USB and make sure the service user can read the serial port:
+
+```bash
+sudo usermod -aG dialout $USER
+```
+
+Log out and back in, then restart `bitaxe-agent-ui`. If auto-detect picks the wrong port, set `NERDMINER_SERIAL_PORT=/dev/ttyUSB0` in `.env`.
+
 If a miner accepts different setting keys, map them in `.env`:
 
 ```env
